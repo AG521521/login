@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>考勤控制面板</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fa;
+      min-height: 100vh;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 24px; }
+    .user-info { display: flex; align-items: center; gap: 15px; }
+    .logout-btn {
+      background: rgba(255,255,255,0.2);
+      border: none;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 30px auto;
+      padding: 0 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .card h2 {
+      margin-bottom: 20px;
+      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .subscription-form {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-group label { font-weight: 500; color: #666; font-size: 14px; }
+    .form-group input, .form-group select {
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .btn-success { background: #28a745; color: white; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-outline { background: white; border: 1px solid #ddd; color: #666; }
+    
+    .subscription-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .subscription-info h4 { margin-bottom: 5px; }
+    .subscription-info p { color: #888; font-size: 13px; }
+    .subscription-actions { display: flex; gap: 8px; }
+    .status-badge {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-enabled { background: #d4edda; color: #155724; }
+    .status-disabled { background: #f8d7da; color: #721c24; }
+    .log-item {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .log-success { color: #28a745; }
+    .log-failed { color: #dc3545; }
+    .weekday-selector { display: flex; gap: 5px; flex-wrap: wrap; }
+    .weekday-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid #ddd;
+      background: white;
+      cursor: pointer;
+    }
+    .weekday-btn.selected {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📋 智能考勤控制面板</h1>
+    <div class="user-info">
+      <span id="userName"></span>
+      <button class="logout-btn" onclick="logout()">退出登录</button>
+    </div>
+  </div>
+  
+  <div class="container">
+    <!-- 快捷签到 -->
+    <div class="card">
+      <h2>⚡ 快速签到</h2>
+      <p style="margin-bottom: 15px; color: #666;">点击按钮立即执行一次签到</p>
+      <button class="btn btn-success" onclick="quickSign()" id="quickSignBtn">
+        🚀 立即签到
+      </button>
+      <span id="signResult" style="margin-left: 15px;"></span>
+    </div>
+    
+    <!-- 添加订阅 -->
+    <div class="card">
+      <h2>➕ 添加考勤订阅</h2>
+      <div class="subscription-form">
+        <div class="form-group">
+          <label>课程名称</label>
+          <input type="text" id="courseName" placeholder="例如：晚寝签到">
+        </div>
+        <div class="form-group">
+          <label>签到时间</label>
+          <input type="time" id="signTime" value="21:25">
+        </div>
+        <div class="form-group">
+          <label>最大重试次数</label>
+          <input type="number" id="maxRetries" value="3" min="1" max="5">
+        </div>
+        <div class="form-group">
+          <label>自动签到</label>
+          <select id="autoSign">
+            <option value="true">✅ 开启</option>
+            <option value="false">❌ 关闭</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom: 15px;">
+        <label>签到日期（可多选）</label>
+        <div class="weekday-selector" id="weekdaySelector">
+          <button class="weekday-btn selected" data-day="1">一</button>
+          <button class="weekday-btn selected" data-day="2">二</button>
+          <button class="weekday-btn selected" data-day="3">三</button>
+          <button class="weekday-btn selected" data-day="4">四</button>
+          <button class="weekday-btn selected" data-day="5">五</button>
+          <button class="weekday-btn" data-day="6">六</button>
+          <button class="weekday-btn" data-day="0">日</button>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="addSubscription()">➕ 添加订阅</button>
+    </div>
+    
+    <!-- 我的订阅 -->
+    <div class="card">
+      <h2>📌 我的订阅</h2>
+      <div id="subscriptionsList">
+        <p style="color: #999;">加载中...</p>
+      </div>
+    </div>
+    
+    <!-- 签到记录 -->
+    <div class="card">
+      <h2>📜 最近签到记录</h2>
+      <div id="logsList">
+        <p style="color: #999;">加载中...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'https://login-production-f825.up.railway.app';
+    const token = localStorage.getItem('token');
+    
+    if (!token) {
+      window.location.href = '/';
+    }
+    
+    // 星期选择器
+    document.querySelectorAll('.weekday-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        this.classList.toggle('selected');
+      });
+    });
+    
+    // 加载用户信息
+    async function loadUserInfo() {
+      try {
+        const res = await fetch(`${API_BASE}/user/profile`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('userName').textContent = 
+            `${data.user.name} (${data.user.studentId})`;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    
+    // 加载订阅列表
+    async function loadSubscriptions() {
+      try {
+        const res = await fetch(`${API_BASE}/subscriptions`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        
+        const container = document.getElementById('subscriptionsList');
+        if (!data.subscriptions || data.subscriptions.length === 0) {
+          container.innerHTML = '<p style="color: #999;">暂无订阅，请添加</p>';
+          return;
+        }
+        
+        container.innerHTML = data.subscriptions.map(sub => {
+          const days = ['日', '一', '二', '三', '四', '五', '六'];
+          const dayStr = sub.schedule.days.map(d => days[d]).join('、');
+          return `
+            <div class="subscription-item">
+              <div class="subscription-info">
+                <h4>${sub.courseName}</h4>
+                <p>⏰ 每天 ${sub.schedule.time} | 📅 ${dayStr} | 🔄 重试 ${sub.maxRetries} 次</p>
+              </div>
+              <div class="subscription-actions">
+                <span class="status-badge ${sub.enabled ? 'status-enabled' : 'status-disabled'}">
+                  ${sub.enabled ? '已启用' : '已禁用'}
+                </span>
+                <button class="btn btn-outline" onclick="toggleSubscription('${sub._id}', ${!sub.enabled})">
+                  ${sub.enabled ? '禁用' : '启用'}
+                </button>
+                <button class="btn btn-danger" onclick="deleteSubscription('${sub._id}')">删除</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    
+    // 加载签到记录
+    async function loadLogs() {
+      try {
+        const res = await fetch(`${API_BASE}/sign/logs`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        
+        const container = document.getElementById('logsList');
+        if (!data.logs || data.logs.length === 0) {
+          container.innerHTML = '<p style="color: #999;">暂无签到记录</p>';
+          return;
+        }
+        
+        container.innerHTML = data.logs.map(log => `
+          <div class="log-item">
+            <span class="${log.status === 'success' ? 'log-success' : 'log-failed'}">
+              ${log.status === 'success' ? '✅' : '❌'}
+            </span>
+            <div style="flex: 1;">
+              <strong>${log.courseName}</strong>
+              <span style="color: #999; margin-left: 10px;">${new Date(log.signTime).toLocaleString()}</span>
+            </div>
+            <span style="color: #666;">${log.message || ''}</span>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    
+    // 快速签到
+    async function quickSign() {
+      const btn = document.getElementById('quickSignBtn');
+      const resultSpan = document.getElementById('signResult');
+      
+      btn.disabled = true;
+      btn.textContent = '⏳ 签到中...';
+      resultSpan.textContent = '';
+      
+      try {
+        const res = await fetch(`${API_BASE}/sign/trigger`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          resultSpan.innerHTML = '<span style="color: #28a745;">✅ 签到成功！</span>';
+          loadLogs();
+        } else {
+          resultSpan.innerHTML = `<span style="color: #dc3545;">❌ ${data.message}</span>`;
+        }
+      } catch (e) {
+        resultSpan.innerHTML = '<span style="color: #dc3545;">❌ 网络错误</span>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 立即签到';
+      }
+    }
+    
+    // 添加订阅
+    async function addSubscription() {
+      const courseName = document.getElementById('courseName').value;
+      const signTime = document.getElementById('signTime').value;
+      const maxRetries = parseInt(document.getElementById('maxRetries').value);
+      const autoSign = document.getElementById('autoSign').value === 'true';
+      
+      if (!courseName) {
+        alert('请输入课程名称');
+        return;
+      }
+      
+      const selectedDays = [];
+      document.querySelectorAll('.weekday-btn.selected').forEach(btn => {
+        selectedDays.push(parseInt(btn.dataset.day));
+      });
+      
+      if (selectedDays.length === 0) {
+        alert('请选择至少一个签到日期');
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/subscriptions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            courseName,
+            schedule: { days: selectedDays, time: signTime },
+            autoSign,
+            maxRetries
+          })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          alert('订阅添加成功！');
+          document.getElementById('courseName').value = '';
+          loadSubscriptions();
+        } else {
+          alert('添加失败：' + data.message);
+        }
+      } catch (e) {
+        alert('网络错误');
+      }
+    }
+    
+    // 切换订阅状态
+    async function toggleSubscription(id, enabled) {
+      try {
+        await fetch(`${API_BASE}/subscriptions/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ enabled })
+        });
+        loadSubscriptions();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    // 删除订阅
+    async function deleteSubscription(id) {
+      if (!confirm('确定删除这个订阅吗？')) return;
+      
+      try {
+        await fetch(`${API_BASE}/subscriptions/${id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        loadSubscriptions();
+      } catch (e) {
+        alert('删除失败');
+      }
+    }
+    
+    function logout() {
+      localStorage.removeItem('token');
+      window.location.href = '/';
+    }
+    
+    // 初始化
+    loadUserInfo();
+    loadSubscriptions();
+    loadLogs();
+  </script>
+</body>
+</html>
