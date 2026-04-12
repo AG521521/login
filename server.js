@@ -1,5 +1,6 @@
-// ============ 智能考勤系统 API v3.2 ============
-//  功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
+// ============ 智能考勤系统 API v3.3 ============
+// 功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
+// 新增：管理员删除用户、管理员代签到
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -70,7 +71,7 @@ const userSchema = new mongoose.Schema({
   vipExpireAt: { type: Date, default: null },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   isActive: { type: Boolean, default: true },
-  attendancePassword: { type: String, default: 'Ahgydx@920' },  // 考勤系统密码
+  attendancePassword: { type: String, default: 'Ahgydx@920' },
   createdAt: { type: Date, default: Date.now },
   lastLogin: Date,
   totalSignCount: { type: Number, default: 0 },
@@ -357,7 +358,6 @@ async function executeAutoSign() {
       try {
         console.log(`🔄 签到: ${user.studentId}`);
         
-        // 使用用户保存的考勤密码
         const signPassword = user.attendancePassword || 'Ahgydx@920';
         const signResult = await realSign(user.studentId, signPassword, 3);
         
@@ -378,7 +378,6 @@ async function executeAutoSign() {
           await log.save();
         }
         
-        // 检查 VIP 状态并发送通知
         console.log(`📧 VIP 检查: isVip=${user.isVip}, emailVerified=${user.emailVerified}, email=${user.email || '无'}`);
         
         if (user.isVip && user.emailVerified && user.email) {
@@ -405,7 +404,6 @@ async function executeAutoSign() {
               console.log(`📧 通知发送结果: ${result ? '成功' : '失败'}`);
             }
           } else {
-            // VIP 过期，自动取消
             user.isVip = false;
             await user.save();
             console.log(`📧 VIP 已过期，取消 VIP 状态`);
@@ -435,7 +433,7 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'running', version: '3.2.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
+  res.json({ status: 'running', version: '3.3.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
 // ============ 登录 ============
@@ -463,7 +461,6 @@ app.post('/api/login', async (req, res) => {
       await user.save();
     } else {
       user.lastLogin = new Date();
-      // 更新考勤密码（如果提供了新的）
       if (attendancePassword) {
         user.attendancePassword = attendancePassword;
       }
@@ -754,7 +751,6 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
     });
     await log.save();
     
-    // VIP 邮件通知
     if (user.isVip && user.emailVerified && user.email) {
       const now = new Date();
       if (user.vipExpireAt && user.vipExpireAt > now) {
@@ -822,6 +818,7 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
 
 // ============ 管理员 API ============
 
+// 系统统计
 app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -849,6 +846,7 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   }
 });
 
+// 用户列表
 app.get('/api/admin/users', adminMiddleware, async (req, res) => {
   try {
     const { page = 1, limit = 20, search = '' } = req.query;
@@ -875,6 +873,7 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
   }
 });
 
+// 用户详情
 app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -891,15 +890,19 @@ app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   }
 });
 
+// 更新用户
 app.put('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   try {
-    const { isVip, vipExpireAt, role, isActive } = req.body;
+    const { name, email, attendancePassword, isVip, vipExpireAt, role, isActive } = req.body;
     
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
     
+    if (name !== undefined) user.name = name;
+    if (email !== undefined) user.email = email;
+    if (attendancePassword !== undefined) user.attendancePassword = attendancePassword;
     if (isVip !== undefined) user.isVip = isVip;
     if (vipExpireAt) user.vipExpireAt = new Date(vipExpireAt);
     if (role) user.role = role;
@@ -912,6 +915,102 @@ app.put('/api/admin/users/:id', adminMiddleware, async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// 删除用户
+app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    
+    // 不允许删除自己
+    if (user._id.toString() === req.user._id.toString()) {
+      return res.status(400).json({ success: false, message: '不能删除自己的账号' });
+    }
+    
+    // 删除用户相关的所有数据
+    await Subscription.deleteMany({ userId: user._id });
+    await SignLog.deleteMany({ userId: user._id });
+    await EmailCode.deleteMany({ userId: user._id });
+    
+    // 更新卡密（移除使用者信息）
+    await Card.updateMany(
+      { usedBy: user._id }, 
+      { $unset: { usedBy: '', usedAt: '' }, status: 'unused' }
+    );
+    
+    await User.deleteOne({ _id: user._id });
+    
+    console.log(`✅ 管理员 ${req.user.studentId} 删除了用户 ${user.studentId}`);
+    
+    res.json({ success: true, message: '用户已删除' });
+  } catch (error) {
+    console.error('删除用户错误:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 管理员代签到
+app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
+  try {
+    const targetUserId = req.params.userId;
+    const { attendancePassword } = req.body;
+    
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    
+    const signPassword = attendancePassword || targetUser.attendancePassword || 'Ahgydx@920';
+    
+    console.log(`🚀 管理员 ${req.user.studentId} 为 ${targetUser.studentId} 执行签到`);
+    
+    const signResult = await realSign(targetUser.studentId, signPassword, 3);
+    
+    targetUser.totalSignCount = (targetUser.totalSignCount || 0) + 1;
+    if (signResult.success) {
+      targetUser.successSignCount = (targetUser.successSignCount || 0) + 1;
+    }
+    await targetUser.save();
+    
+    const log = new SignLog({
+      userId: targetUser._id,
+      subscriptionName: `管理员代签 (by ${req.user.studentId})`,
+      status: signResult.success ? 'success' : 'failed',
+      message: signResult.message || ''
+    });
+    await log.save();
+    
+    if (targetUser.isVip && targetUser.emailVerified && targetUser.email) {
+      const now = new Date();
+      if (targetUser.vipExpireAt && targetUser.vipExpireAt > now) {
+        await sendSignNotification(
+          targetUser.email, 
+          targetUser.studentId, 
+          signResult, 
+          '管理员代签'
+        );
+      }
+    }
+    
+    res.json({
+      success: true,
+      result: {
+        success: signResult.success,
+        message: signResult.message,
+        errors: signResult.errors || []
+      }
+    });
+  } catch (error) {
+    console.error('代签错误:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 卡密管理 ============
 
 app.post('/api/admin/cards/generate', adminMiddleware, async (req, res) => {
   try {
@@ -974,7 +1073,7 @@ cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
-  console.log(`📍 版本: 3.2.0 (考勤密码保存 + 邮件通知修复)`);
+  console.log(`📍 版本: 3.3.0 (管理员删除用户 + 代签功能)`);
   console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
   console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
 });
