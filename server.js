@@ -1,14 +1,16 @@
-// ============ 智能考勤系统 API v3.0 ============
-// 功能：学号登录、自动签到订阅、自定义日期、邮箱绑定
+// ============ 智能考勤系统 API v3.0 完整版 ============
+// 功能：学号登录、自动签到订阅、邮箱VIP、卡密系统、管理员后台
 
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const cors = require('cors');
 const cron = require('node-cron');
 const { spawn } = require('child_process');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -18,7 +20,8 @@ const allowedOrigins = [
   'https://api.agai.online',
   'https://attendance-frontend.ag985211ag.workers.dev',
   'http://localhost:3000',
-  'http://127.0.0.1:5500'
+  'http://127.0.0.1:5500',
+  'http://localhost:5500'
 ];
 
 app.use(cors({
@@ -67,20 +70,21 @@ const userSchema = new mongoose.Schema({
   emailVerified: { type: Boolean, default: false },
   isVip: { type: Boolean, default: false },
   vipExpireAt: { type: Date, default: null },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   lastLogin: Date,
   totalSignCount: { type: Number, default: 0 },
   successSignCount: { type: Number, default: 0 }
 });
 
-// 签到订阅模型
+// 订阅模型
 const subscriptionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, default: '晚寝签到' },
   enabled: { type: Boolean, default: true },
-  // 自定义日期配置
   scheduleType: { type: String, enum: ['daily', 'weekdays', 'custom'], default: 'weekdays' },
-  customDays: { type: [Number], default: [1, 2, 3, 4, 5] }, // 0=周日, 1=周一...
+  customDays: { type: [Number], default: [1, 2, 3, 4, 5] },
   signTime: { type: String, default: '21:25' },
   maxRetries: { type: Number, default: 3 },
   notifyOnSuccess: { type: Boolean, default: true },
@@ -110,13 +114,25 @@ const emailCodeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// 卡密模型
+const cardSchema = new mongoose.Schema({
+  code: { type: String, required: true, unique: true },
+  days: { type: Number, default: 30 },
+  type: { type: String, enum: ['vip_30d', 'vip_90d', 'vip_365d'], default: 'vip_30d' },
+  status: { type: String, enum: ['unused', 'used'], default: 'unused' },
+  usedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  usedAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
 const EmailCode = mongoose.models.EmailCode || mongoose.model('EmailCode', emailCodeSchema);
+const Card = mongoose.models.Card || mongoose.model('Card', cardSchema);
 
 // ============ JWT 配置 ============
-const JWT_SECRET = process.env.JWT_SECRET || 'attendance-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'attendance-secret-key-2024-please-change';
 const JWT_EXPIRE = '30d';
 
 // ============ 认证中间件 ============
@@ -146,6 +162,20 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
+// 管理员中间件
+const adminMiddleware = async (req, res, next) => {
+  try {
+    await authMiddleware(req, res, async () => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, message: '需要管理员权限' });
+      }
+      next();
+    });
+  } catch (error) {
+    res.status(401).json({ success: false, message: '未授权' });
+  }
+};
+
 // ============ 邮箱配置 ============
 const EMAIL_USER = process.env.EMAIL_USER || '';
 const EMAIL_PASS = process.env.EMAIL_PASS || '';
@@ -158,7 +188,7 @@ const transporter = EMAIL_USER && EMAIL_PASS ? nodemailer.createTransport({
 // 发送验证码
 async function sendVerificationCode(email, code) {
   if (!transporter) {
-    console.log('📧 邮箱未配置，模拟发送验证码:', code);
+    console.log('📧 邮箱未配置，验证码:', code);
     return true;
   }
   
@@ -175,7 +205,7 @@ async function sendVerificationCode(email, code) {
             ${code}
           </div>
           <p>验证码 5 分钟内有效。</p>
-          <hr style="margin: 20px 0;">
+          <hr>
           <p style="color: #999; font-size: 12px;">AG工作室 · 智能考勤系统</p>
         </div>
       `
@@ -255,6 +285,102 @@ async function realSign(studentId, password, maxRetries = 3) {
   });
 }
 
+// ============ 自动签到执行函数 ============
+async function executeAutoSign() {
+  console.log('⏰ 自动签到任务开始:', new Date().toISOString());
+  
+  if (!MONGODB_URI) {
+    console.log('⚠️ 数据库未连接');
+    return;
+  }
+  
+  try {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    
+    const subscriptions = await Subscription.find({ enabled: true }).populate('userId');
+    
+    const todaySubscriptions = subscriptions.filter(sub => {
+      if (sub.scheduleType === 'daily') return true;
+      if (sub.scheduleType === 'weekdays') return dayOfWeek >= 1 && dayOfWeek <= 5;
+      if (sub.scheduleType === 'custom') {
+        return sub.customDays && sub.customDays.includes(dayOfWeek);
+      }
+      return false;
+    });
+    
+    const userMap = new Map();
+    for (const sub of todaySubscriptions) {
+      const user = sub.userId;
+      if (user && user.isActive !== false) {
+        if (!userMap.has(user._id.toString())) {
+          userMap.set(user._id.toString(), { user, subscriptions: [] });
+        }
+        userMap.get(user._id.toString()).subscriptions.push(sub);
+      }
+    }
+    
+    console.log(`📊 今天需要签到: ${userMap.size} 个用户`);
+    
+    for (const [userId, data] of userMap) {
+      const { user, subscriptions } = data;
+      
+      try {
+        console.log(`🔄 签到: ${user.studentId}`);
+        
+        const signResult = await realSign(user.studentId, 'Ahgydx@920', 3);
+        
+        user.totalSignCount = (user.totalSignCount || 0) + 1;
+        if (signResult.success) {
+          user.successSignCount = (user.successSignCount || 0) + 1;
+        }
+        await user.save();
+        
+        for (const sub of subscriptions) {
+          const log = new SignLog({
+            userId: user._id,
+            subscriptionId: sub._id,
+            subscriptionName: sub.name,
+            status: signResult.success ? 'success' : 'failed',
+            message: signResult.message || ''
+          });
+          await log.save();
+        }
+        
+        // VIP 邮件通知
+        if (user.isVip && user.emailVerified && user.email) {
+          const now = new Date();
+          if (user.vipExpireAt && user.vipExpireAt > now) {
+            const shouldNotify = signResult.success ? 
+              subscriptions.some(s => s.notifyOnSuccess) : 
+              subscriptions.some(s => s.notifyOnFailure);
+            
+            if (shouldNotify) {
+              await sendSignNotification(user.email, user.studentId, signResult, 
+                subscriptions.map(s => s.name).join(', '));
+            }
+          } else {
+            user.isVip = false;
+            await user.save();
+          }
+        }
+        
+        console.log(`✅ ${user.studentId}: ${signResult.success ? '成功' : '失败'}`);
+        
+      } catch (error) {
+        console.error(`❌ ${user.studentId}:`, error.message);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    
+    console.log('✅ 自动签到任务完成');
+    
+  } catch (error) {
+    console.error('❌ 定时任务错误:', error);
+  }
+}
+
 // ============ API 路由 ============
 
 // 健康检查
@@ -266,7 +392,7 @@ app.get('/', (req, res) => {
   res.json({ status: 'running', version: '3.0.0' });
 });
 
-// ============ 登录（不验证密码，直接通过）============
+// ============ 登录 ============
 app.post('/api/login', async (req, res) => {
   try {
     const { studentId, attendancePassword } = req.body;
@@ -279,23 +405,15 @@ app.post('/api/login', async (req, res) => {
       return res.status(503).json({ success: false, message: '数据库未配置' });
     }
     
-    // 查找或创建用户
     let user = await User.findOne({ studentId });
     
     if (!user) {
-      user = new User({
-        studentId,
-        name: studentId,
-        lastLogin: new Date()
-      });
+      user = new User({ studentId, name: studentId, lastLogin: new Date() });
       await user.save();
     } else {
       user.lastLogin = new Date();
       await user.save();
     }
-    
-    // 保存考勤密码到内存（不存数据库，仅用于本次会话的签到）
-    // 实际签到时会从请求中获取
     
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
     
@@ -309,6 +427,8 @@ app.post('/api/login', async (req, res) => {
         email: user.email,
         emailVerified: user.emailVerified,
         isVip: user.isVip,
+        vipExpireAt: user.vipExpireAt,
+        role: user.role,
         totalSignCount: user.totalSignCount,
         successSignCount: user.successSignCount
       }
@@ -332,6 +452,7 @@ app.get('/api/user/profile', authMiddleware, async (req, res) => {
       emailVerified: user.emailVerified,
       isVip: user.isVip,
       vipExpireAt: user.vipExpireAt,
+      role: user.role,
       totalSignCount: user.totalSignCount,
       successSignCount: user.successSignCount,
       createdAt: user.createdAt
@@ -344,10 +465,8 @@ app.put('/api/user/profile', authMiddleware, async (req, res) => {
   try {
     const { name } = req.body;
     const user = req.user;
-    
     if (name) user.name = name;
     await user.save();
-    
     res.json({ success: true, user: { name: user.name } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -355,8 +474,6 @@ app.put('/api/user/profile', authMiddleware, async (req, res) => {
 });
 
 // ============ 邮箱绑定 ============
-
-// 发送验证码
 app.post('/api/email/send-code', authMiddleware, async (req, res) => {
   try {
     const { email } = req.body;
@@ -366,16 +483,13 @@ app.post('/api/email/send-code', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, message: '请输入邮箱' });
     }
     
-    // 检查邮箱是否已被其他用户绑定
     const existingUser = await User.findOne({ email, _id: { $ne: user._id } });
     if (existingUser) {
       return res.status(400).json({ success: false, message: '该邮箱已被绑定' });
     }
     
-    // 生成 6 位验证码
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // 保存验证码
     await EmailCode.deleteMany({ email, used: false });
     const emailCode = new EmailCode({
       email,
@@ -385,12 +499,7 @@ app.post('/api/email/send-code', authMiddleware, async (req, res) => {
     });
     await emailCode.save();
     
-    // 发送邮件
     const sent = await sendVerificationCode(email, code);
-    
-    if (!sent && EMAIL_USER) {
-      return res.status(500).json({ success: false, message: '邮件发送失败' });
-    }
     
     res.json({ 
       success: true, 
@@ -402,7 +511,6 @@ app.post('/api/email/send-code', authMiddleware, async (req, res) => {
   }
 });
 
-// 验证并绑定邮箱
 app.post('/api/email/verify', authMiddleware, async (req, res) => {
   try {
     const { email, code } = req.body;
@@ -418,16 +526,13 @@ app.post('/api/email/verify', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, message: '验证码已过期' });
     }
     
-    // 标记已使用
     emailCode.used = true;
     await emailCode.save();
     
-    // 更新用户邮箱
     user.email = email;
     user.emailVerified = true;
     user.isVip = true;
     
-    // VIP 有效期 30 天（示例）
     const vipExpireAt = new Date();
     vipExpireAt.setDate(vipExpireAt.getDate() + 30);
     user.vipExpireAt = vipExpireAt;
@@ -448,9 +553,50 @@ app.post('/api/email/verify', authMiddleware, async (req, res) => {
   }
 });
 
-// ============ 订阅管理 ============
+// ============ 卡密兑换 ============
+app.post('/api/vip/redeem', authMiddleware, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const user = req.user;
+    
+    if (!code) {
+      return res.status(400).json({ success: false, message: '请输入卡密' });
+    }
+    
+    const card = await Card.findOne({ code: code.toUpperCase(), status: 'unused' });
+    if (!card) {
+      return res.status(400).json({ success: false, message: '卡密无效或已被使用' });
+    }
+    
+    const now = new Date();
+    let expireAt;
+    if (user.isVip && user.vipExpireAt && user.vipExpireAt > now) {
+      expireAt = new Date(user.vipExpireAt);
+    } else {
+      expireAt = new Date();
+    }
+    expireAt.setDate(expireAt.getDate() + card.days);
+    
+    user.isVip = true;
+    user.vipExpireAt = expireAt;
+    await user.save();
+    
+    card.status = 'used';
+    card.usedBy = user._id;
+    card.usedAt = new Date();
+    await card.save();
+    
+    res.json({
+      success: true,
+      message: `兑换成功！VIP 有效期至 ${expireAt.toLocaleDateString()}`,
+      vipExpireAt: expireAt
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
-// 获取订阅列表
+// ============ 订阅管理 ============
 app.get('/api/subscriptions', authMiddleware, async (req, res) => {
   try {
     const subscriptions = await Subscription.find({ userId: req.user._id });
@@ -460,7 +606,6 @@ app.get('/api/subscriptions', authMiddleware, async (req, res) => {
   }
 });
 
-// 创建订阅
 app.post('/api/subscriptions', authMiddleware, async (req, res) => {
   try {
     const { name, scheduleType, customDays, signTime, maxRetries, notifyOnSuccess, notifyOnFailure } = req.body;
@@ -484,14 +629,9 @@ app.post('/api/subscriptions', authMiddleware, async (req, res) => {
   }
 });
 
-// 更新订阅
 app.put('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   try {
-    const subscription = await Subscription.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
-    
+    const subscription = await Subscription.findOne({ _id: req.params.id, userId: req.user._id });
     if (!subscription) {
       return res.status(404).json({ success: false, message: '订阅不存在' });
     }
@@ -506,7 +646,6 @@ app.put('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 删除订阅
 app.delete('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   try {
     await Subscription.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
@@ -516,14 +655,9 @@ app.delete('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 切换订阅状态
 app.post('/api/subscriptions/:id/toggle', authMiddleware, async (req, res) => {
   try {
-    const subscription = await Subscription.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
-    
+    const subscription = await Subscription.findOne({ _id: req.params.id, userId: req.user._id });
     if (!subscription) {
       return res.status(404).json({ success: false, message: '订阅不存在' });
     }
@@ -541,24 +675,21 @@ app.post('/api/subscriptions/:id/toggle', authMiddleware, async (req, res) => {
 // ============ 手动签到 ============
 app.post('/api/sign/manual', authMiddleware, async (req, res) => {
   try {
-    const { studentId, attendancePassword } = req.body;
+    const { attendancePassword } = req.body;
     const user = req.user;
     
-    const signStudentId = studentId || user.studentId;
     const signPassword = attendancePassword || 'Ahgydx@920';
     
-    console.log(`🚀 手动签到: ${signStudentId}`);
+    console.log(`🚀 手动签到: ${user.studentId}`);
     
-    const signResult = await realSign(signStudentId, signPassword, 3);
+    const signResult = await realSign(user.studentId, signPassword, 3);
     
-    // 更新用户签到统计
     user.totalSignCount = (user.totalSignCount || 0) + 1;
     if (signResult.success) {
       user.successSignCount = (user.successSignCount || 0) + 1;
     }
     await user.save();
     
-    // 记录日志
     const log = new SignLog({
       userId: user._id,
       subscriptionName: '手动签到',
@@ -567,9 +698,11 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
     });
     await log.save();
     
-    // 发送邮件通知（如果是 VIP 且绑定了邮箱）
     if (user.isVip && user.emailVerified && user.email) {
-      await sendSignNotification(user.email, signStudentId, signResult, '手动签到');
+      const now = new Date();
+      if (user.vipExpireAt && user.vipExpireAt > now) {
+        await sendSignNotification(user.email, user.studentId, signResult, '手动签到');
+      }
     }
     
     res.json({
@@ -595,7 +728,6 @@ app.get('/api/sign/logs', authMiddleware, async (req, res) => {
       .limit(parseInt(limit));
     
     const total = await SignLog.countDocuments({ userId: req.user._id });
-    
     res.json({ success: true, logs, total, page: parseInt(page) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -610,21 +742,9 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const todaySigns = await SignLog.countDocuments({
-      userId: user._id,
-      executedAt: { $gte: today }
-    });
-    
-    const todaySuccess = await SignLog.countDocuments({
-      userId: user._id,
-      status: 'success',
-      executedAt: { $gte: today }
-    });
-    
-    const activeSubscriptions = await Subscription.countDocuments({
-      userId: user._id,
-      enabled: true
-    });
+    const todaySigns = await SignLog.countDocuments({ userId: user._id, executedAt: { $gte: today } });
+    const todaySuccess = await SignLog.countDocuments({ userId: user._id, status: 'success', executedAt: { $gte: today } });
+    const activeSubscriptions = await Subscription.countDocuments({ userId: user._id, enabled: true });
     
     res.json({
       success: true,
@@ -643,120 +763,168 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
   }
 });
 
-// ============ 定时任务（每天晚上自动签到）============
-async function executeAutoSign() {
-  console.log('⏰ 自动签到任务开始:', new Date().toISOString());
-  
-  if (!MONGODB_URI) {
-    console.log('⚠️ 数据库未连接');
-    return;
-  }
-  
+// ============ 管理员 API ============
+
+// 系统统计
+app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   try {
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0=周日, 1=周一...
+    const totalUsers = await User.countDocuments();
+    const vipUsers = await User.countDocuments({ isVip: true });
+    const todayUsers = await User.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
     
-    // 获取所有启用的订阅
-    const subscriptions = await Subscription.find({ enabled: true })
-      .populate('userId');
+    const totalSigns = await SignLog.countDocuments();
+    const todaySigns = await SignLog.countDocuments({ executedAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
+    const successSigns = await SignLog.countDocuments({ status: 'success' });
+    const todaySuccessSigns = await SignLog.countDocuments({ status: 'success', executedAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
+    const successRate = todaySigns > 0 ? ((todaySuccessSigns / todaySigns) * 100).toFixed(1) : 0;
     
-    // 筛选今天需要签到的订阅
-    const todaySubscriptions = subscriptions.filter(sub => {
-      if (sub.scheduleType === 'daily') return true;
-      if (sub.scheduleType === 'weekdays') return dayOfWeek >= 1 && dayOfWeek <= 5;
-      if (sub.scheduleType === 'custom') {
-        return sub.customDays && sub.customDays.includes(dayOfWeek);
+    const activeSubscriptions = await Subscription.countDocuments({ enabled: true });
+    
+    res.json({
+      success: true,
+      stats: {
+        users: { total: totalUsers, vip: vipUsers, today: todayUsers },
+        signs: { total: totalSigns, today: todaySigns, success: successSigns, successRate },
+        subscriptions: { active: activeSubscriptions }
       }
-      return false;
     });
-    
-    // 按用户分组
-    const userMap = new Map();
-    for (const sub of todaySubscriptions) {
-      const user = sub.userId;
-      if (user) {
-        if (!userMap.has(user._id.toString())) {
-          userMap.set(user._id.toString(), { user, subscriptions: [] });
-        }
-        userMap.get(user._id.toString()).subscriptions.push(sub);
-      }
-    }
-    
-    console.log(`📊 今天需要签到: ${userMap.size} 个用户`);
-    
-    for (const [userId, data] of userMap) {
-      const { user, subscriptions } = data;
-      
-      try {
-        console.log(`🔄 签到: ${user.studentId}`);
-        
-        const signResult = await realSign(
-          user.studentId,
-          'Ahgydx@920',
-          3
-        );
-        
-        // 更新统计
-        user.totalSignCount = (user.totalSignCount || 0) + 1;
-        if (signResult.success) {
-          user.successSignCount = (user.successSignCount || 0) + 1;
-        }
-        await user.save();
-        
-        // 记录日志
-        for (const sub of subscriptions) {
-          const log = new SignLog({
-            userId: user._id,
-            subscriptionId: sub._id,
-            subscriptionName: sub.name,
-            status: signResult.success ? 'success' : 'failed',
-            message: signResult.message || ''
-          });
-          await log.save();
-        }
-        
-        // 发送通知
-        if (user.isVip && user.emailVerified && user.email) {
-          const shouldNotify = signResult.success ? 
-            subscriptions.some(s => s.notifyOnSuccess) : 
-            subscriptions.some(s => s.notifyOnFailure);
-          
-          if (shouldNotify) {
-            await sendSignNotification(
-              user.email, 
-              user.studentId, 
-              signResult, 
-              subscriptions.map(s => s.name).join(', ')
-            );
-          }
-        }
-        
-        console.log(`✅ ${user.studentId}: ${signResult.success ? '成功' : '失败'}`);
-        
-      } catch (error) {
-        console.error(`❌ ${user.studentId}:`, error.message);
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-    
-    console.log('✅ 自动签到任务完成');
-    
   } catch (error) {
-    console.error('❌ 定时任务错误:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
-}
+});
 
-// 每天 21:25 执行
+// 用户列表
+app.get('/api/admin/users', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '' } = req.query;
+    
+    const query = search ? {
+      $or: [
+        { studentId: { $regex: search, $options: 'i' } },
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ]
+    } : {};
+    
+    const users = await User.find(query)
+      .select('-__v')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    
+    const total = await User.countDocuments(query);
+    
+    res.json({ success: true, users, total, page: parseInt(page) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 用户详情
+app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    
+    const subscriptions = await Subscription.find({ userId: user._id });
+    const logs = await SignLog.find({ userId: user._id }).sort({ executedAt: -1 }).limit(20);
+    
+    res.json({ success: true, user, subscriptions, logs });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 更新用户
+app.put('/api/admin/users/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { isVip, vipExpireAt, role, isActive } = req.body;
+    
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    
+    if (isVip !== undefined) user.isVip = isVip;
+    if (vipExpireAt) user.vipExpireAt = new Date(vipExpireAt);
+    if (role) user.role = role;
+    if (isActive !== undefined) user.isActive = isActive;
+    
+    await user.save();
+    
+    res.json({ success: true, user });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 生成卡密
+app.post('/api/admin/cards/generate', adminMiddleware, async (req, res) => {
+  try {
+    const { count = 10, days = 30 } = req.body;
+    
+    const cards = [];
+    for (let i = 0; i < count; i++) {
+      const code = 'VIP' + crypto.randomBytes(6).toString('hex').toUpperCase();
+      cards.push({ code, days, type: `vip_${days}d` });
+    }
+    
+    await Card.insertMany(cards);
+    
+    res.json({ success: true, cards, message: `成功生成 ${count} 张卡密` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 卡密列表
+app.get('/api/admin/cards', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, status } = req.query;
+    
+    const query = status ? { status } : {};
+    
+    const cards = await Card.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .populate('usedBy', 'studentId name');
+    
+    const total = await Card.countDocuments(query);
+    const unusedCount = await Card.countDocuments({ status: 'unused' });
+    const usedCount = await Card.countDocuments({ status: 'used' });
+    
+    res.json({ success: true, cards, total, unusedCount, usedCount, page: parseInt(page) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 导出卡密
+app.get('/api/admin/cards/export', adminMiddleware, async (req, res) => {
+  try {
+    const cards = await Card.find({ status: 'unused' }).select('code days');
+    const text = cards.map(c => `${c.code} - ${c.days}天`).join('\n');
+    
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="vip_cards.txt"');
+    res.send(text);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 定时任务 ============
 cron.schedule('25 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
-
-// 每天 21:30 执行（备用）
 cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 
 // ============ 启动服务 ============
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
-  console.log(`📍 版本: 3.0.0`);
+  console.log(`📍 版本: 3.0.0 完整版`);
   console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
+  console.log(`👑 管理员功能已启用`);
 });
