@@ -1,5 +1,5 @@
 // ============ 智能考勤系统 API v3.2 ============
-// 功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
+//  功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
 
 const express = require('express');
 const mongoose = require('mongoose');
