@@ -1,0 +1,8 @@
+{
+  "build": {
+    "builder": "NIXPACKS",
+    "nixpacksPlan": {
+      "providers": ["node", "python"]
+    }
+  }
+}
