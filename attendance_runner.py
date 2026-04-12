@@ -1,29 +1,21 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 考勤脚本执行器 - 供 Node.js 后端调用
-接收学号和密码，执行单人或多人签到，返回 JSON 结果
 """
 
 import sys
 import json
 import asyncio
-import logging
-from datetime import datetime
-
-# ========== 导入你原有脚本的核心类 ==========
-# 假设你原有的脚本叫 attendance_core.py，把核心代码放进去
-# 或者直接把原有的 User 类和 sign_in 函数复制过来
-
-# 这里我把你原有代码的核心部分精简整合：
-
-import base64
-from datetime import datetime, timezone, timedelta
 import hashlib
+import base64
 import random
 import time
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from urllib.parse import urlparse
 import aiohttp
+
 
 # ========== 配置常量 ==========
 API_BASE_URL = "https://xskq.ahut.edu.cn/api"
@@ -41,8 +33,6 @@ UA_LIST = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.61(0x18003D29) NetType/WIFI Language/zh_CN",
 ]
 
-# 并发限制
-MAX_CONCURRENT = 5
 SIGN_IN_LOCK = asyncio.Lock()
 
 
@@ -159,10 +149,6 @@ def generate_data(user: User) -> dict:
     }
 
 
-def get_time_str():
-    return datetime.now().strftime('%Y-%m-%d')
-
-
 async def sign_in_by_step(user: User, step: int) -> dict:
     """执行单步签到"""
     if step == 0:
@@ -249,6 +235,8 @@ async def sign_in_by_step(user: User, step: int) -> dict:
             if "请求未授权" in str(sign_in_result):
                 user.token = ''
                 return {'success': False, 'msg': 'token失效', 'step': 0}
+            if '未到签到时间' in sign_in_result.get('msg', ''):
+                return {'success': False, 'msg': sign_in_result.get('msg'), 'step': -1}
             return {'success': False, 'msg': sign_in_result.get('msg', '签到失败'), 'step': step}
     
     return {'success': False, 'msg': '未知步骤', 'step': -1}
@@ -270,80 +258,35 @@ async def sign_in_single(user: User, max_retries: int = 3) -> dict:
                 retries += 1
         await asyncio.sleep(random.uniform(0.5, 2))
     
+    await user.close()
+    
     if step == 6:
-        return {'success': True, 'data': error_history, 'message': '签到成功'}
+        return {'success': True, 'errors': error_history, 'message': '签到成功'}
     else:
-        return {'success': False, 'data': error_history, 'message': '签到失败: ' + '; '.join(error_history)}
-
-
-async def sign_in_batch(users_data: list) -> dict:
-    """批量签到"""
-    users = [User(student_Id=str(u['studentId']), password=u['password']) for u in users_data]
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-    
-    async def limited_sign_in(user):
-        async with semaphore:
-            return await sign_in_single(user)
-    
-    results = await asyncio.gather(*(limited_sign_in(u) for u in users))
-    await asyncio.gather(*[u.close() for u in users])
-    
-    return {
-        str(users[i].student_Id): {
-            'success': result['success'],
-            'message': result['message'],
-            'errors': result.get('data', [])
-        }
-        for i, result in enumerate(results)
-    }
+        return {'success': False, 'errors': error_history, 'message': '签到失败: ' + '; '.join(error_history[-3:])}
 
 
 # ========== 命令行入口 ==========
 async def main():
-    """从命令行参数读取输入，输出 JSON 结果"""
     try:
-        # 从 stdin 读取 JSON 输入
         input_data = json.loads(sys.stdin.read())
-        
-        action = input_data.get('action', 'sign')
+        action = input_data.get('action', 'sign_single')
         
         if action == 'sign_single':
-            # 单人签到
             user_data = input_data.get('user', {})
             user = User(
                 student_Id=str(user_data.get('studentId')),
-                password=user_data.get('password')
+                password=user_data.get('password', 'Ahgydx@920')
             )
-            result = await sign_in_single(user)
-            print(json.dumps({
-                'success': result['success'],
-                'message': result['message'],
-                'data': result.get('data', [])
-            }, ensure_ascii=False))
-            
-        elif action == 'sign_batch':
-            # 批量签到
-            users_data = input_data.get('users', [])
-            result = await sign_in_batch(users_data)
-            print(json.dumps({
-                'success': True,
-                'results': result
-            }, ensure_ascii=False))
+            result = await sign_in_single(user, max_retries=input_data.get('maxRetries', 3))
+            print(json.dumps(result, ensure_ascii=False))
             
         else:
-            print(json.dumps({
-                'success': False,
-                'message': f'未知操作: {action}'
-            }, ensure_ascii=False))
+            print(json.dumps({'success': False, 'message': f'未知操作: {action}'}, ensure_ascii=False))
             
     except Exception as e:
-        print(json.dumps({
-            'success': False,
-            'message': str(e)
-        }, ensure_ascii=False))
+        print(json.dumps({'success': False, 'message': str(e)}, ensure_ascii=False))
 
 
 if __name__ == '__main__':
-    # 设置日志级别为 WARNING，减少输出
-    logging.basicConfig(level=logging.WARNING)
     asyncio.run(main())
