@@ -1,4 +1,4 @@
-// ============ 环境变量（Railway 会自动注入，本地测试用）============
+// ============ 环境变量（Railway 会自动注入）============
 // require('dotenv').config();
 
 const express = require('express');
@@ -7,6 +7,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const cron = require('node-cron');
+const { spawn } = require('child_process');
+const path = require('path');
 
 const app = express();
 
@@ -26,16 +28,12 @@ const allowedOrigins = [
 // ============ CORS 中间件 ============
 app.use(cors({
   origin: function (origin, callback) {
-    // 允许无 origin 的请求（如 Postman、curl、服务器间调用）
     if (!origin) return callback(null, true);
-    
-    // 检查是否在白名单中
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.log('❌ CORS 拒绝的域名:', origin);
-      // 开发阶段暂时允许所有，生产环境改为 callback(new Error('Not allowed by CORS'))
-      callback(null, true);
+      callback(null, true); // 开发阶段允许所有
     }
   },
   credentials: true,
@@ -44,7 +42,7 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-// ============ 额外的 OPTIONS 处理（确保预检请求返回 200）============
+// ============ 额外的 OPTIONS 处理 ============
 app.options('*', (req, res) => {
   console.log('📡 OPTIONS 请求来自:', req.headers.origin);
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
@@ -105,7 +103,6 @@ const signLogSchema = new mongoose.Schema({
   signTime: { type: Date, default: Date.now }
 });
 
-// 避免模型重复定义
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
@@ -144,14 +141,66 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// ============ 模拟签到函数 ============
-async function mockSign(studentId) {
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  const success = Math.random() > 0.1;
-  return {
-    success,
-    message: success ? '签到成功（模拟模式）' : '签到失败：网络超时（模拟）',
-  };
+// ============ 调用 Python 签到脚本 ============
+async function realSign(studentId, password, maxRetries = 3) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = path.join(__dirname, 'attendance_runner.py');
+    
+    const pythonProcess = spawn('python3', [pythonScript]);
+    
+    let output = '';
+    let errorOutput = '';
+    
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.error('Python stderr:', data.toString());
+    });
+    
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`Python 脚本退出码: ${code}`);
+        resolve({
+          success: false,
+          message: `签到脚本执行失败`,
+          errors: [errorOutput || '未知错误']
+        });
+        return;
+      }
+      try {
+        const result = JSON.parse(output);
+        resolve(result);
+      } catch (e) {
+        console.error('解析 Python 输出失败:', output);
+        resolve({
+          success: false,
+          message: '解析签到结果失败',
+          errors: [output]
+        });
+      }
+    });
+    
+    pythonProcess.on('error', (err) => {
+      console.error('启动 Python 进程失败:', err);
+      resolve({
+        success: false,
+        message: '无法启动签到脚本，请检查 Python 环境',
+        errors: [err.message]
+      });
+    });
+    
+    const inputData = {
+      action: 'sign_single',
+      user: { studentId, password },
+      maxRetries
+    };
+    
+    pythonProcess.stdin.write(JSON.stringify(inputData));
+    pythonProcess.stdin.end();
+  });
 }
 
 // ============ 健康检查接口 ============
@@ -169,7 +218,8 @@ app.get('/', (req, res) => {
   res.json({
     status: 'running',
     message: '智能考勤系统 API',
-    version: '2.1.0',
+    version: '2.2.0',
+    features: ['真实签到', '定时任务', 'MongoDB'],
     endpoints: [
       'GET /health',
       'POST /api/register',
@@ -353,13 +403,21 @@ app.delete('/api/subscriptions/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ============ 手动触发签到 ============
+// ============ 手动触发签到（真实签到）============
 app.post('/api/sign/trigger', authMiddleware, async (req, res) => {
   try {
     const user = req.user;
     
-    // 执行模拟签到
-    const signResult = await mockSign(user.studentId);
+    console.log(`🚀 开始为 ${user.studentId} 执行真实签到...`);
+    
+    // 执行真实签到
+    const signResult = await realSign(
+      user.studentId,
+      user.attendancePassword || 'Ahgydx@920',
+      3  // 最大重试次数
+    );
+    
+    console.log(`📋 签到结果:`, signResult);
     
     // 获取用户的所有启用订阅
     const subscriptions = await Subscription.find({
@@ -367,24 +425,23 @@ app.post('/api/sign/trigger', authMiddleware, async (req, res) => {
       enabled: true
     });
     
-    // 如果没有订阅，也记录一条日志
+    // 记录日志
     if (subscriptions.length === 0) {
       const log = new SignLog({
         userId: user._id,
         courseName: '手动签到',
         status: signResult.success ? 'success' : 'failed',
-        message: signResult.message
+        message: signResult.message || JSON.stringify(signResult.errors || [])
       });
       await log.save();
     } else {
-      // 为每个订阅记录日志
       for (const sub of subscriptions) {
         const log = new SignLog({
           userId: user._id,
           subscriptionId: sub._id,
           courseName: sub.courseName,
           status: signResult.success ? 'success' : 'failed',
-          message: signResult.message
+          message: signResult.message || JSON.stringify(signResult.errors || [])
         });
         await log.save();
       }
@@ -392,7 +449,11 @@ app.post('/api/sign/trigger', authMiddleware, async (req, res) => {
     
     res.json({
       success: true,
-      result: signResult
+      result: {
+        success: signResult.success,
+        message: signResult.message,
+        errors: signResult.errors || []
+      }
     });
   } catch (error) {
     console.error('签到错误:', error);
@@ -413,7 +474,7 @@ app.get('/api/sign/logs', authMiddleware, async (req, res) => {
   }
 });
 
-// ============ 定时任务（每天 21:25 执行）============
+// ============ 定时任务（每天 21:25 执行真实签到）============
 cron.schedule('25 21 * * *', async () => {
   console.log('⏰ 定时签到任务开始:', new Date().toISOString());
   
@@ -423,42 +484,59 @@ cron.schedule('25 21 * * *', async () => {
   }
   
   try {
+    // 获取所有启用自动签到的订阅
     const subscriptions = await Subscription.find({ enabled: true, autoSign: true })
       .populate('userId');
     
+    // 按用户去重
     const userMap = new Map();
     for (const sub of subscriptions) {
       const user = sub.userId;
-      if (user && !userMap.has(user._id.toString())) {
-        userMap.set(user._id.toString(), user);
+      if (user && user.isActive !== false) {
+        if (!userMap.has(user._id.toString())) {
+          userMap.set(user._id.toString(), user);
+        }
       }
     }
     
+    console.log(`📊 共有 ${userMap.size} 个用户需要签到`);
+    
     for (const [userId, user] of userMap) {
       try {
-        const signResult = await mockSign(user.studentId);
+        console.log(`🔄 正在为 ${user.studentId} 签到...`);
         
+        const signResult = await realSign(
+          user.studentId,
+          user.attendancePassword || 'Ahgydx@920',
+          3
+        );
+        
+        // 获取该用户的所有订阅
         const userSubs = subscriptions.filter(s => s.userId._id.toString() === userId);
+        
         for (const sub of userSubs) {
           const log = new SignLog({
             userId,
             subscriptionId: sub._id,
             courseName: sub.courseName,
             status: signResult.success ? 'success' : 'failed',
-            message: signResult.message
+            message: signResult.message || JSON.stringify(signResult.errors || [])
           });
           await log.save();
         }
         
         console.log(`✅ ${user.studentId} 签到完成:`, signResult.success ? '成功' : '失败');
+        
       } catch (error) {
         console.error(`❌ ${user.studentId} 签到失败:`, error.message);
       }
       
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 间隔 5 秒，避免请求过快
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
     
     console.log('✅ 定时签到任务完成');
+    
   } catch (error) {
     console.error('❌ 定时任务错误:', error);
   }
@@ -471,4 +549,5 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
   console.log(`📍 健康检查: http://0.0.0.0:${PORT}/health`);
+  console.log(`🤖 真实签到功能已启用`);
 });
