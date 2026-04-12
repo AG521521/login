@@ -1,5 +1,5 @@
-// ============ 智能考勤系统 API v3.0 完整版 ============
-// 功能：学号登录、自动签到订阅、邮箱VIP、卡密系统、管理员后台
+// ============ 智能考勤系统 API v3.1 ============
+// 功能：学号登录、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -9,7 +9,6 @@ const cors = require('cors');
 const cron = require('node-cron');
 const { spawn } = require('child_process');
 const path = require('path');
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 
 const app = express();
@@ -62,7 +61,6 @@ if (!MONGODB_URI) {
 
 // ============ 数据模型 ============
 
-// 用户模型
 const userSchema = new mongoose.Schema({
   studentId: { type: String, required: true, unique: true },
   name: { type: String, default: '' },
@@ -78,7 +76,6 @@ const userSchema = new mongoose.Schema({
   successSignCount: { type: Number, default: 0 }
 });
 
-// 订阅模型
 const subscriptionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, default: '晚寝签到' },
@@ -93,7 +90,6 @@ const subscriptionSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// 签到日志模型
 const signLogSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   subscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Subscription' },
@@ -104,7 +100,6 @@ const signLogSchema = new mongoose.Schema({
   executedAt: { type: Date, default: Date.now }
 });
 
-// 邮箱验证码模型
 const emailCodeSchema = new mongoose.Schema({
   email: { type: String, required: true },
   code: { type: String, required: true },
@@ -114,7 +109,6 @@ const emailCodeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// 卡密模型
 const cardSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true },
   days: { type: Number, default: 30 },
@@ -162,7 +156,6 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// 管理员中间件
 const adminMiddleware = async (req, res, next) => {
   try {
     await authMiddleware(req, res, async () => {
@@ -176,74 +169,103 @@ const adminMiddleware = async (req, res, next) => {
   }
 };
 
-// ============ 邮箱配置 ============
-const EMAIL_USER = process.env.EMAIL_USER || '';
-const EMAIL_PASS = process.env.EMAIL_PASS || '';
+// ============ 邮箱配置（Resend API）============
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 
-const transporter = EMAIL_USER && EMAIL_PASS ? nodemailer.createTransport({
-  service: 'qq',
-  auth: { user: EMAIL_USER, pass: EMAIL_PASS }
-}) : null;
-
-// 发送验证码
 async function sendVerificationCode(email, code) {
-  if (!transporter) {
-    console.log('📧 邮箱未配置，验证码:', code);
-    return true;
+  if (!RESEND_API_KEY) {
+    console.log('📧 Resend 未配置，验证码:', code);
+    return false;
   }
   
   try {
-    await transporter.sendMail({
-      from: `"智能考勤系统" <${EMAIL_USER}>`,
-      to: email,
-      subject: '邮箱验证码 - 智能考勤系统',
-      html: `
-        <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial;">
-          <h2 style="color: #667eea;">智能考勤系统</h2>
-          <p>您的验证码是：</p>
-          <div style="font-size: 32px; font-weight: bold; color: #667eea; padding: 20px; background: #f5f7fa; text-align: center; border-radius: 10px;">
-            ${code}
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: '智能考勤系统 <noreply@agai.online>',
+        to: email,
+        subject: '邮箱验证码 - 智能考勤系统',
+        html: `
+          <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #667eea; margin: 0;">📋 智能考勤系统</h1>
+              <p style="color: #888; margin: 5px 0 0;">AG工作室</p>
+            </div>
+            <p style="font-size: 16px;">您的邮箱验证码是：</p>
+            <div style="font-size: 36px; font-weight: bold; color: #667eea; padding: 20px; background: #f5f7fa; text-align: center; border-radius: 12px; letter-spacing: 5px;">
+              ${code}
+            </div>
+            <p style="margin-top: 20px; color: #666;">验证码 5 分钟内有效，请勿泄露给他人。</p>
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px; text-align: center;">AG工作室 · 智能考勤系统 · 自动发送请勿回复</p>
           </div>
-          <p>验证码 5 分钟内有效。</p>
-          <hr>
-          <p style="color: #999; font-size: 12px;">AG工作室 · 智能考勤系统</p>
-        </div>
-      `
+        `
+      })
     });
-    return true;
+    
+    if (response.ok) {
+      console.log('✅ 验证码邮件发送成功:', email);
+      return true;
+    } else {
+      const error = await response.text();
+      console.error('❌ Resend 发送失败:', error);
+      return false;
+    }
   } catch (error) {
-    console.error('发送邮件失败:', error);
+    console.error('❌ 发送邮件异常:', error);
     return false;
   }
 }
 
-// 发送签到通知
 async function sendSignNotification(email, studentId, result, subscriptionName) {
-  if (!transporter) return false;
+  if (!RESEND_API_KEY) {
+    return false;
+  }
   
   const emoji = result.success ? '✅' : '❌';
   const statusText = result.success ? '成功' : '失败';
+  const statusColor = result.success ? '#28a745' : '#dc3545';
   
   try {
-    await transporter.sendMail({
-      from: `"智能考勤系统" <${EMAIL_USER}>`,
-      to: email,
-      subject: `${emoji} 签到${statusText}通知 - ${subscriptionName}`,
-      html: `
-        <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial;">
-          <h2 style="color: #667eea;">签到${statusText}通知</h2>
-          <p><strong>学号：</strong>${studentId}</p>
-          <p><strong>任务：</strong>${subscriptionName}</p>
-          <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
-          <p><strong>结果：</strong><span style="color: ${result.success ? '#28a745' : '#dc3545'};">${result.message}</span></p>
-          <hr>
-          <p style="color: #999; font-size: 12px;">AG工作室 · 智能考勤系统</p>
-        </div>
-      `
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: '智能考勤系统 <noreply@agai.online>',
+        to: email,
+        subject: `${emoji} 签到${statusText}通知 - ${subscriptionName}`,
+        html: `
+          <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #667eea; margin: 0;">📋 签到通知</h1>
+            </div>
+            <div style="background: #f5f7fa; padding: 20px; border-radius: 12px;">
+              <p><strong>学号：</strong>${studentId}</p>
+              <p><strong>任务：</strong>${subscriptionName}</p>
+              <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
+              <p><strong>结果：</strong><span style="color: ${statusColor};">${result.message || statusText}</span></p>
+            </div>
+            <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
+            <p style="color: #999; font-size: 12px; text-align: center;">AG工作室 · 智能考勤系统</p>
+          </div>
+        `
+      })
     });
-    return true;
+    
+    if (response.ok) {
+      console.log('✅ 签到通知发送成功:', email);
+      return true;
+    } else {
+      return false;
+    }
   } catch (error) {
-    console.error('发送通知失败:', error);
     return false;
   }
 }
@@ -347,7 +369,6 @@ async function executeAutoSign() {
           await log.save();
         }
         
-        // VIP 邮件通知
         if (user.isVip && user.emailVerified && user.email) {
           const now = new Date();
           if (user.vipExpireAt && user.vipExpireAt > now) {
@@ -383,19 +404,18 @@ async function executeAutoSign() {
 
 // ============ API 路由 ============
 
-// 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', time: new Date().toISOString() });
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'running', version: '3.0.0' });
+  res.json({ status: 'running', version: '3.1.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
 // ============ 登录 ============
 app.post('/api/login', async (req, res) => {
   try {
-    const { studentId, attendancePassword } = req.body;
+    const { studentId } = req.body;
     
     if (!studentId) {
       return res.status(400).json({ success: false, message: '请输入学号' });
@@ -503,8 +523,8 @@ app.post('/api/email/send-code', authMiddleware, async (req, res) => {
     
     res.json({ 
       success: true, 
-      message: EMAIL_USER ? '验证码已发送' : '验证码已生成（邮箱未配置，请输入 123456）',
-      debugCode: EMAIL_USER ? undefined : '123456'
+      message: sent ? '验证码已发送' : '验证码已生成（邮件服务暂不可用）',
+      debugCode: sent ? undefined : code
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -765,7 +785,6 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
 
 // ============ 管理员 API ============
 
-// 系统统计
 app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -793,7 +812,6 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   }
 });
 
-// 用户列表
 app.get('/api/admin/users', adminMiddleware, async (req, res) => {
   try {
     const { page = 1, limit = 20, search = '' } = req.query;
@@ -820,7 +838,6 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
   }
 });
 
-// 用户详情
 app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -837,7 +854,6 @@ app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   }
 });
 
-// 更新用户
 app.put('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   try {
     const { isVip, vipExpireAt, role, isActive } = req.body;
@@ -860,7 +876,6 @@ app.put('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   }
 });
 
-// 生成卡密
 app.post('/api/admin/cards/generate', adminMiddleware, async (req, res) => {
   try {
     const { count = 10, days = 30 } = req.body;
@@ -879,7 +894,6 @@ app.post('/api/admin/cards/generate', adminMiddleware, async (req, res) => {
   }
 });
 
-// 卡密列表
 app.get('/api/admin/cards', adminMiddleware, async (req, res) => {
   try {
     const { page = 1, limit = 50, status } = req.query;
@@ -902,7 +916,6 @@ app.get('/api/admin/cards', adminMiddleware, async (req, res) => {
   }
 });
 
-// 导出卡密
 app.get('/api/admin/cards/export', adminMiddleware, async (req, res) => {
   try {
     const cards = await Card.find({ status: 'unused' }).select('code days');
@@ -924,7 +937,7 @@ cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
-  console.log(`📍 版本: 3.0.0 完整版`);
+  console.log(`📍 版本: 3.1.0 (Resend 邮件服务)`);
+  console.log(`📧 邮件服务: ${RESEND_API_KEY ? '已配置' : '未配置'}`);
   console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
-  console.log(`👑 管理员功能已启用`);
 });
