@@ -1,5 +1,5 @@
-// ============ 智能考勤系统 API v3.1 ============
-// 功能：学号登录、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
+// ============ 智能考勤系统 API v3.2 ============
+// 功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -70,6 +70,7 @@ const userSchema = new mongoose.Schema({
   vipExpireAt: { type: Date, default: null },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   isActive: { type: Boolean, default: true },
+  attendancePassword: { type: String, default: 'Ahgydx@920' },  // 考勤系统密码
   createdAt: { type: Date, default: Date.now },
   lastLogin: Date,
   totalSignCount: { type: Number, default: 0 },
@@ -222,7 +223,10 @@ async function sendVerificationCode(email, code) {
 }
 
 async function sendSignNotification(email, studentId, result, subscriptionName) {
+  console.log(`📧 准备发送通知: email=${email}, studentId=${studentId}, success=${result.success}, subscription=${subscriptionName}`);
+  
   if (!RESEND_API_KEY) {
+    console.log('📧 Resend 未配置，跳过通知');
     return false;
   }
   
@@ -263,9 +267,12 @@ async function sendSignNotification(email, studentId, result, subscriptionName) 
       console.log('✅ 签到通知发送成功:', email);
       return true;
     } else {
+      const error = await response.text();
+      console.error('❌ 通知发送失败:', error);
       return false;
     }
   } catch (error) {
+    console.error('❌ 发送通知异常:', error);
     return false;
   }
 }
@@ -350,7 +357,9 @@ async function executeAutoSign() {
       try {
         console.log(`🔄 签到: ${user.studentId}`);
         
-        const signResult = await realSign(user.studentId, 'Ahgydx@920', 3);
+        // 使用用户保存的考勤密码
+        const signPassword = user.attendancePassword || 'Ahgydx@920';
+        const signResult = await realSign(user.studentId, signPassword, 3);
         
         user.totalSignCount = (user.totalSignCount || 0) + 1;
         if (signResult.success) {
@@ -369,20 +378,37 @@ async function executeAutoSign() {
           await log.save();
         }
         
+        // 检查 VIP 状态并发送通知
+        console.log(`📧 VIP 检查: isVip=${user.isVip}, emailVerified=${user.emailVerified}, email=${user.email || '无'}`);
+        
         if (user.isVip && user.emailVerified && user.email) {
           const now = new Date();
-          if (user.vipExpireAt && user.vipExpireAt > now) {
+          const vipValid = user.vipExpireAt && user.vipExpireAt > now;
+          
+          console.log(`📧 VIP 有效期检查: vipExpireAt=${user.vipExpireAt}, now=${now}, vipValid=${vipValid}`);
+          
+          if (vipValid) {
             const shouldNotify = signResult.success ? 
               subscriptions.some(s => s.notifyOnSuccess) : 
               subscriptions.some(s => s.notifyOnFailure);
             
+            console.log(`📧 通知设置: success=${signResult.success}, shouldNotify=${shouldNotify}`);
+            
             if (shouldNotify) {
-              await sendSignNotification(user.email, user.studentId, signResult, 
-                subscriptions.map(s => s.name).join(', '));
+              const subscriptionNames = subscriptions.map(s => s.name).join(', ');
+              const result = await sendSignNotification(
+                user.email, 
+                user.studentId, 
+                signResult, 
+                subscriptionNames
+              );
+              console.log(`📧 通知发送结果: ${result ? '成功' : '失败'}`);
             }
           } else {
+            // VIP 过期，自动取消
             user.isVip = false;
             await user.save();
+            console.log(`📧 VIP 已过期，取消 VIP 状态`);
           }
         }
         
@@ -409,13 +435,13 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'running', version: '3.1.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
+  res.json({ status: 'running', version: '3.2.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
 // ============ 登录 ============
 app.post('/api/login', async (req, res) => {
   try {
-    const { studentId } = req.body;
+    const { studentId, attendancePassword } = req.body;
     
     if (!studentId) {
       return res.status(400).json({ success: false, message: '请输入学号' });
@@ -428,10 +454,19 @@ app.post('/api/login', async (req, res) => {
     let user = await User.findOne({ studentId });
     
     if (!user) {
-      user = new User({ studentId, name: studentId, lastLogin: new Date() });
+      user = new User({ 
+        studentId, 
+        name: studentId,
+        attendancePassword: attendancePassword || 'Ahgydx@920',
+        lastLogin: new Date()
+      });
       await user.save();
     } else {
       user.lastLogin = new Date();
+      // 更新考勤密码（如果提供了新的）
+      if (attendancePassword) {
+        user.attendancePassword = attendancePassword;
+      }
       await user.save();
     }
     
@@ -483,9 +518,10 @@ app.get('/api/user/profile', authMiddleware, async (req, res) => {
 // 更新用户信息
 app.put('/api/user/profile', authMiddleware, async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, attendancePassword } = req.body;
     const user = req.user;
     if (name) user.name = name;
+    if (attendancePassword) user.attendancePassword = attendancePassword;
     await user.save();
     res.json({ success: true, user: { name: user.name } });
   } catch (error) {
@@ -698,7 +734,7 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
     const { attendancePassword } = req.body;
     const user = req.user;
     
-    const signPassword = attendancePassword || 'Ahgydx@920';
+    const signPassword = attendancePassword || user.attendancePassword || 'Ahgydx@920';
     
     console.log(`🚀 手动签到: ${user.studentId}`);
     
@@ -718,6 +754,7 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
     });
     await log.save();
     
+    // VIP 邮件通知
     if (user.isVip && user.emailVerified && user.email) {
       const now = new Date();
       if (user.vipExpireAt && user.vipExpireAt > now) {
@@ -937,7 +974,7 @@ cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
-  console.log(`📍 版本: 3.1.0 (Resend 邮件服务)`);
-  console.log(`📧 邮件服务: ${RESEND_API_KEY ? '已配置' : '未配置'}`);
+  console.log(`📍 版本: 3.2.0 (考勤密码保存 + 邮件通知修复)`);
+  console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
   console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
 });
