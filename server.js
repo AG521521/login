@@ -1,6 +1,7 @@
-// ============ 智能考勤系统 API v3.4 ============
+// ============ 智能考勤系统 API v3.5 ============
 // 功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
-// 新增：邀请功能、系统通知配置、邮件宣传信息、时区修复、管理员删除用户、管理员代签到
+// 包含：邀请功能、系统通知配置、邮件宣传信息、时区修复、管理员删除用户、管理员代签到
+// 新增：用户留言反馈系统
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -150,6 +151,20 @@ const inviteLogSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// 留言/反馈模型
+const feedbackSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  type: { type: String, enum: ['bug', 'suggestion', 'question', 'other'], default: 'other' },
+  status: { type: String, enum: ['pending', 'read', 'replied', 'closed'], default: 'pending' },
+  adminReply: { type: String, default: '' },
+  repliedAt: { type: Date },
+  repliedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
@@ -157,6 +172,7 @@ const EmailCode = mongoose.models.EmailCode || mongoose.model('EmailCode', email
 const Card = mongoose.models.Card || mongoose.model('Card', cardSchema);
 const SystemConfig = mongoose.models.SystemConfig || mongoose.model('SystemConfig', systemConfigSchema);
 const InviteLog = mongoose.models.InviteLog || mongoose.model('InviteLog', inviteLogSchema);
+const Feedback = mongoose.models.Feedback || mongoose.model('Feedback', feedbackSchema);
 
 // ============ 初始化系统配置 ============
 async function initSystemConfig() {
@@ -510,7 +526,7 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'running', version: '3.4.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
+  res.json({ status: 'running', version: '3.5.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
 // ============ 登录 ============
@@ -1008,6 +1024,67 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
   }
 });
 
+// ============ 留言反馈 API ============
+
+// 提交留言
+app.post('/api/feedback', authMiddleware, async (req, res) => {
+  try {
+    const { title, content, type } = req.body;
+    const user = req.user;
+    
+    if (!title || !content) {
+      return res.status(400).json({ success: false, message: '请填写标题和内容' });
+    }
+    
+    const feedback = new Feedback({
+      userId: user._id,
+      title,
+      content,
+      type: type || 'other',
+      status: 'pending'
+    });
+    
+    await feedback.save();
+    
+    res.json({ success: true, feedback, message: '留言提交成功，我们会尽快回复！' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取用户的留言列表
+app.get('/api/feedback/my', authMiddleware, async (req, res) => {
+  try {
+    const feedbacks = await Feedback.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    
+    res.json({ success: true, feedbacks });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取单条留言详情
+app.get('/api/feedback/:id', authMiddleware, async (req, res) => {
+  try {
+    const feedback = await Feedback.findById(req.params.id);
+    
+    if (!feedback) {
+      return res.status(404).json({ success: false, message: '留言不存在' });
+    }
+    
+    // 检查权限：只能看自己的，管理员可以看所有
+    if (feedback.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: '无权查看' });
+    }
+    
+    res.json({ success: true, feedback });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ 管理员 API ============
 
 // 系统统计
@@ -1161,6 +1238,7 @@ app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
     await SignLog.deleteMany({ userId: user._id });
     await EmailCode.deleteMany({ userId: user._id });
     await InviteLog.deleteMany({ $or: [{ inviterId: user._id }, { inviteeId: user._id }] });
+    await Feedback.deleteMany({ userId: user._id });
     
     await Card.updateMany(
       { usedBy: user._id }, 
@@ -1238,6 +1316,106 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
   }
 });
 
+// ============ 管理员留言管理 API ============
+
+// 获取所有留言（管理员）
+app.get('/api/admin/feedback', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status, type } = req.query;
+    
+    const query = {};
+    if (status) query.status = status;
+    if (type) query.type = type;
+    
+    const feedbacks = await Feedback.find(query)
+      .populate('userId', 'studentId name email')
+      .populate('repliedBy', 'studentId name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    
+    const total = await Feedback.countDocuments(query);
+    
+    const pendingCount = await Feedback.countDocuments({ status: 'pending' });
+    const readCount = await Feedback.countDocuments({ status: 'read' });
+    const repliedCount = await Feedback.countDocuments({ status: 'replied' });
+    const closedCount = await Feedback.countDocuments({ status: 'closed' });
+    
+    res.json({ 
+      success: true, 
+      feedbacks, 
+      total, 
+      page: parseInt(page),
+      stats: { pending: pendingCount, read: readCount, replied: repliedCount, closed: closedCount }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 回复留言（管理员）
+app.put('/api/admin/feedback/:id/reply', adminMiddleware, async (req, res) => {
+  try {
+    const { reply } = req.body;
+    const feedback = await Feedback.findById(req.params.id);
+    
+    if (!feedback) {
+      return res.status(404).json({ success: false, message: '留言不存在' });
+    }
+    
+    if (!reply) {
+      return res.status(400).json({ success: false, message: '请输入回复内容' });
+    }
+    
+    feedback.adminReply = reply;
+    feedback.status = 'replied';
+    feedback.repliedAt = new Date();
+    feedback.repliedBy = req.user._id;
+    feedback.updatedAt = new Date();
+    
+    await feedback.save();
+    
+    res.json({ success: true, feedback, message: '回复成功' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 更新留言状态（管理员）
+app.put('/api/admin/feedback/:id/status', adminMiddleware, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const feedback = await Feedback.findById(req.params.id);
+    
+    if (!feedback) {
+      return res.status(404).json({ success: false, message: '留言不存在' });
+    }
+    
+    feedback.status = status;
+    feedback.updatedAt = new Date();
+    await feedback.save();
+    
+    res.json({ success: true, feedback });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 删除留言（管理员）
+app.delete('/api/admin/feedback/:id', adminMiddleware, async (req, res) => {
+  try {
+    const feedback = await Feedback.findByIdAndDelete(req.params.id);
+    
+    if (!feedback) {
+      return res.status(404).json({ success: false, message: '留言不存在' });
+    }
+    
+    res.json({ success: true, message: '留言已删除' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ 卡密管理 ============
 
 app.post('/api/admin/cards/generate', adminMiddleware, async (req, res) => {
@@ -1303,7 +1481,7 @@ const PORT = process.env.PORT || 8080;
 initSystemConfig().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 服务器运行在端口 ${PORT}`);
-    console.log(`📍 版本: 3.4.0 (邀请功能 + 通知配置 + 邮件宣传 + 时区修复)`);
+    console.log(`📍 版本: 3.5.0 (留言反馈系统)`);
     console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
     console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
   });
