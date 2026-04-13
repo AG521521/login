@@ -1,6 +1,6 @@
-// ============ 智能考勤系统 API v3.3 ============
+// ============ 智能考勤系统 API v3.4 ============
 // 功能：学号登录、考勤密码保存、自动签到订阅、邮箱VIP（Resend）、卡密系统、管理员后台
-// 新增：管理员删除用户、管理员代签到
+// 新增：邀请功能、系统通知配置、邮件宣传信息、时区修复、管理员删除用户、管理员代签到
 
 const express = require('express');
 const mongoose = require('mongoose');
@@ -60,6 +60,16 @@ if (!MONGODB_URI) {
     .catch(err => console.error('❌ MongoDB 连接失败:', err.message));
 }
 
+// ============ 时区辅助函数 ============
+function getBeijingTime(date = new Date()) {
+  return date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+}
+
+// ============ 生成邀请码 ============
+function generateInviteCode(length = 8) {
+  return crypto.randomBytes(length).toString('hex').substring(0, length).toUpperCase();
+}
+
 // ============ 数据模型 ============
 
 const userSchema = new mongoose.Schema({
@@ -75,7 +85,11 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   lastLogin: Date,
   totalSignCount: { type: Number, default: 0 },
-  successSignCount: { type: Number, default: 0 }
+  successSignCount: { type: Number, default: 0 },
+  // 邀请功能字段
+  inviteCode: { type: String, unique: true, sparse: true },
+  invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  inviteCount: { type: Number, default: 0 }
 });
 
 const subscriptionSchema = new mongoose.Schema({
@@ -121,11 +135,54 @@ const cardSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// 系统配置模型
+const systemConfigSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: mongoose.Schema.Types.Mixed,
+  updatedAt: { type: Date, default: Date.now }
+});
+
+// 邀请记录模型
+const inviteLogSchema = new mongoose.Schema({
+  inviterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  inviteeId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  rewardDays: { type: Number, default: 10 },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
 const EmailCode = mongoose.models.EmailCode || mongoose.model('EmailCode', emailCodeSchema);
 const Card = mongoose.models.Card || mongoose.model('Card', cardSchema);
+const SystemConfig = mongoose.models.SystemConfig || mongoose.model('SystemConfig', systemConfigSchema);
+const InviteLog = mongoose.models.InviteLog || mongoose.model('InviteLog', inviteLogSchema);
+
+// ============ 初始化系统配置 ============
+async function initSystemConfig() {
+  const defaults = [
+    { 
+      key: 'dashboard_notice', 
+      value: { 
+        enabled: true, 
+        title: '📢 系统公告', 
+        content: '欢迎使用智能考勤系统！绑定邮箱即可获得 30 天 VIP。邀请好友注册，双方各得 10 天 VIP！', 
+        style: 'info' 
+      } 
+    },
+    { key: 'email_template', value: { footer: 'AG工作室 · 智能考勤系统', website: 'https://login.agai.online' } },
+    { key: 'invite_reward_days', value: 10 }
+  ];
+  
+  for (const cfg of defaults) {
+    const exists = await SystemConfig.findOne({ key: cfg.key });
+    if (!exists) {
+      await SystemConfig.create(cfg);
+      console.log(`✅ 初始化配置: ${cfg.key}`);
+    }
+  }
+  console.log('✅ 系统配置初始化完成');
+}
 
 // ============ JWT 配置 ============
 const JWT_SECRET = process.env.JWT_SECRET || 'attendance-secret-key-2024-please-change';
@@ -192,7 +249,7 @@ async function sendVerificationCode(email, code) {
         to: email,
         subject: '邮箱验证码 - 智能考勤系统',
         html: `
-          <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+          <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
             <div style="text-align: center; margin-bottom: 24px;">
               <h1 style="color: #667eea; margin: 0;">📋 智能考勤系统</h1>
               <p style="color: #888; margin: 5px 0 0;">AG工作室</p>
@@ -202,8 +259,18 @@ async function sendVerificationCode(email, code) {
               ${code}
             </div>
             <p style="margin-top: 20px; color: #666;">验证码 5 分钟内有效，请勿泄露给他人。</p>
+            
+            <div style="margin-top: 24px; padding: 16px; background: linear-gradient(135deg, #667eea10 0%, #764ba210 100%); border-radius: 12px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-weight: 600; color: #667eea;">🎉 绑定邮箱即送 30 天 VIP</p>
+              <p style="margin: 0 0 12px 0; font-size: 13px; color: #666;">享受签到邮件通知 · 邀请好友再送 VIP</p>
+              <a href="https://login.agai.online" style="display: inline-block; padding: 8px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; text-decoration: none; border-radius: 20px; font-size: 14px; font-weight: 500;">立即体验</a>
+            </div>
+            
             <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
-            <p style="color: #999; font-size: 12px; text-align: center;">AG工作室 · 智能考勤系统 · 自动发送请勿回复</p>
+            <p style="color: #999; font-size: 12px; text-align: center;">
+              AG工作室 · 智能考勤系统<br>
+              🌐 https://login.agai.online
+            </p>
           </div>
         `
       })
@@ -223,8 +290,8 @@ async function sendVerificationCode(email, code) {
   }
 }
 
-async function sendSignNotification(email, studentId, result, subscriptionName) {
-  console.log(`📧 准备发送通知: email=${email}, studentId=${studentId}, success=${result.success}, subscription=${subscriptionName}`);
+async function sendSignNotification(email, studentId, result, subscriptionName, signTime = null) {
+  console.log(`📧 准备发送通知: email=${email}, studentId=${studentId}, success=${result.success}`);
   
   if (!RESEND_API_KEY) {
     console.log('📧 Resend 未配置，跳过通知');
@@ -234,6 +301,9 @@ async function sendSignNotification(email, studentId, result, subscriptionName) 
   const emoji = result.success ? '✅' : '❌';
   const statusText = result.success ? '成功' : '失败';
   const statusColor = result.success ? '#28a745' : '#dc3545';
+  const displayTime = signTime 
+    ? signTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) 
+    : getBeijingTime();
   
   try {
     const response = await fetch('https://api.resend.com/emails', {
@@ -247,18 +317,30 @@ async function sendSignNotification(email, studentId, result, subscriptionName) 
         to: email,
         subject: `${emoji} 签到${statusText}通知 - ${subscriptionName}`,
         html: `
-          <div style="max-width: 400px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+          <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
             <div style="text-align: center; margin-bottom: 24px;">
               <h1 style="color: #667eea; margin: 0;">📋 签到通知</h1>
             </div>
             <div style="background: #f5f7fa; padding: 20px; border-radius: 12px;">
               <p><strong>学号：</strong>${studentId}</p>
               <p><strong>任务：</strong>${subscriptionName}</p>
-              <p><strong>时间：</strong>${new Date().toLocaleString('zh-CN')}</p>
+              <p><strong>时间：</strong>${displayTime}</p>
               <p><strong>结果：</strong><span style="color: ${statusColor};">${result.message || statusText}</span></p>
             </div>
+            
+            <div style="margin-top: 24px; padding: 16px; background: linear-gradient(135deg, #667eea10 0%, #764ba210 100%); border-radius: 12px; text-align: center;">
+              <p style="margin: 0 0 8px 0; font-weight: 600; color: #667eea;">🚀 智能考勤 · 让签到更简单</p>
+              <p style="margin: 0 0 12px 0; font-size: 13px; color: #666;">自动签到 · 邮件通知 · 永久免费</p>
+              <a href="https://login.agai.online" style="display: inline-block; padding: 8px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; text-decoration: none; border-radius: 20px; font-size: 14px; font-weight: 500;">访问官网</a>
+              <p style="margin: 12px 0 0 0; font-size: 12px; color: #999;">邀请好友注册，双方各得 10 天 VIP！</p>
+            </div>
+            
             <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;">
-            <p style="color: #999; font-size: 12px; text-align: center;">AG工作室 · 智能考勤系统</p>
+            <p style="color: #999; font-size: 12px; text-align: center;">
+              AG工作室 · 智能考勤系统<br>
+              📧 客服邮箱：support@agai.online<br>
+              🌐 官网：https://login.agai.online
+            </p>
           </div>
         `
       })
@@ -317,7 +399,7 @@ async function realSign(studentId, password, maxRetries = 3) {
 
 // ============ 自动签到执行函数 ============
 async function executeAutoSign() {
-  console.log('⏰ 自动签到任务开始:', new Date().toISOString());
+  console.log('⏰ 自动签到任务开始:', getBeijingTime());
   
   if (!MONGODB_URI) {
     console.log('⚠️ 数据库未连接');
@@ -359,6 +441,7 @@ async function executeAutoSign() {
         console.log(`🔄 签到: ${user.studentId}`);
         
         const signPassword = user.attendancePassword || 'Ahgydx@920';
+        const signTime = new Date();
         const signResult = await realSign(user.studentId, signPassword, 3);
         
         user.totalSignCount = (user.totalSignCount || 0) + 1;
@@ -373,40 +456,34 @@ async function executeAutoSign() {
             subscriptionId: sub._id,
             subscriptionName: sub.name,
             status: signResult.success ? 'success' : 'failed',
-            message: signResult.message || ''
+            message: signResult.message || '',
+            signTime: signTime
           });
           await log.save();
         }
         
-        console.log(`📧 VIP 检查: isVip=${user.isVip}, emailVerified=${user.emailVerified}, email=${user.email || '无'}`);
-        
         if (user.isVip && user.emailVerified && user.email) {
           const now = new Date();
           const vipValid = user.vipExpireAt && user.vipExpireAt > now;
-          
-          console.log(`📧 VIP 有效期检查: vipExpireAt=${user.vipExpireAt}, now=${now}, vipValid=${vipValid}`);
           
           if (vipValid) {
             const shouldNotify = signResult.success ? 
               subscriptions.some(s => s.notifyOnSuccess) : 
               subscriptions.some(s => s.notifyOnFailure);
             
-            console.log(`📧 通知设置: success=${signResult.success}, shouldNotify=${shouldNotify}`);
-            
             if (shouldNotify) {
               const subscriptionNames = subscriptions.map(s => s.name).join(', ');
-              const result = await sendSignNotification(
+              await sendSignNotification(
                 user.email, 
                 user.studentId, 
                 signResult, 
-                subscriptionNames
+                subscriptionNames,
+                signTime
               );
-              console.log(`📧 通知发送结果: ${result ? '成功' : '失败'}`);
             }
           } else {
             user.isVip = false;
             await user.save();
-            console.log(`📧 VIP 已过期，取消 VIP 状态`);
           }
         }
         
@@ -429,11 +506,11 @@ async function executeAutoSign() {
 // ============ API 路由 ============
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', time: new Date().toISOString() });
+  res.json({ status: 'healthy', time: getBeijingTime() });
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'running', version: '3.3.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
+  res.json({ status: 'running', version: '3.4.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
 // ============ 登录 ============
@@ -452,10 +529,19 @@ app.post('/api/login', async (req, res) => {
     let user = await User.findOne({ studentId });
     
     if (!user) {
+      let inviteCode;
+      let isUnique = false;
+      while (!isUnique) {
+        inviteCode = generateInviteCode(8);
+        const existing = await User.findOne({ inviteCode });
+        if (!existing) isUnique = true;
+      }
+      
       user = new User({ 
         studentId, 
         name: studentId,
         attendancePassword: attendancePassword || 'Ahgydx@920',
+        inviteCode,
         lastLogin: new Date()
       });
       await user.save();
@@ -463,6 +549,16 @@ app.post('/api/login', async (req, res) => {
       user.lastLogin = new Date();
       if (attendancePassword) {
         user.attendancePassword = attendancePassword;
+      }
+      if (!user.inviteCode) {
+        let inviteCode;
+        let isUnique = false;
+        while (!isUnique) {
+          inviteCode = generateInviteCode(8);
+          const existing = await User.findOne({ inviteCode });
+          if (!existing) isUnique = true;
+        }
+        user.inviteCode = inviteCode;
       }
       await user.save();
     }
@@ -481,6 +577,9 @@ app.post('/api/login', async (req, res) => {
         isVip: user.isVip,
         vipExpireAt: user.vipExpireAt,
         role: user.role,
+        inviteCode: user.inviteCode,
+        invitedBy: user.invitedBy,
+        inviteCount: user.inviteCount,
         totalSignCount: user.totalSignCount,
         successSignCount: user.successSignCount
       }
@@ -505,6 +604,9 @@ app.get('/api/user/profile', authMiddleware, async (req, res) => {
       isVip: user.isVip,
       vipExpireAt: user.vipExpireAt,
       role: user.role,
+      inviteCode: user.inviteCode,
+      invitedBy: user.invitedBy,
+      inviteCount: user.inviteCount,
       totalSignCount: user.totalSignCount,
       successSignCount: user.successSignCount,
       createdAt: user.createdAt
@@ -521,6 +623,19 @@ app.put('/api/user/profile', authMiddleware, async (req, res) => {
     if (attendancePassword) user.attendancePassword = attendancePassword;
     await user.save();
     res.json({ success: true, user: { name: user.name } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 系统通知 ============
+app.get('/api/notice', authMiddleware, async (req, res) => {
+  try {
+    const config = await SystemConfig.findOne({ key: 'dashboard_notice' });
+    res.json({ 
+      success: true, 
+      notice: config?.value || { enabled: false, title: '', content: '', style: 'info' } 
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -649,6 +764,81 @@ app.post('/api/vip/redeem', authMiddleware, async (req, res) => {
   }
 });
 
+// ============ 邀请功能 ============
+app.get('/api/invite/info', authMiddleware, async (req, res) => {
+  try {
+    const user = req.user;
+    
+    const invitedUsers = await User.find({ invitedBy: user._id }).select('studentId name createdAt');
+    const rewardConfig = await SystemConfig.findOne({ key: 'invite_reward_days' });
+    
+    res.json({
+      success: true,
+      inviteCode: user.inviteCode,
+      inviteCount: user.inviteCount || 0,
+      inviteUrl: `https://login.agai.online?invite=${user.inviteCode}`,
+      rewardDays: rewardConfig?.value || 10,
+      invitedUsers
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/invite/apply', authMiddleware, async (req, res) => {
+  try {
+    const { inviteCode } = req.body;
+    const user = req.user;
+    
+    if (user.invitedBy) {
+      return res.status(400).json({ success: false, message: '您已经绑定过邀请人了' });
+    }
+    
+    const inviter = await User.findOne({ inviteCode: inviteCode.toUpperCase() });
+    if (!inviter) {
+      return res.status(400).json({ success: false, message: '邀请码无效' });
+    }
+    
+    if (inviter._id.toString() === user._id.toString()) {
+      return res.status(400).json({ success: false, message: '不能邀请自己' });
+    }
+    
+    const rewardConfig = await SystemConfig.findOne({ key: 'invite_reward_days' });
+    const rewardDays = rewardConfig?.value || 10;
+    
+    user.invitedBy = inviter._id;
+    
+    const now = new Date();
+    let expireAt = user.vipExpireAt && user.vipExpireAt > now ? new Date(user.vipExpireAt) : now;
+    expireAt.setDate(expireAt.getDate() + rewardDays);
+    user.isVip = true;
+    user.vipExpireAt = expireAt;
+    await user.save();
+    
+    let inviterExpireAt = inviter.vipExpireAt && inviter.vipExpireAt > now ? new Date(inviter.vipExpireAt) : now;
+    inviterExpireAt.setDate(inviterExpireAt.getDate() + rewardDays);
+    inviter.isVip = true;
+    inviter.vipExpireAt = inviterExpireAt;
+    inviter.inviteCount = (inviter.inviteCount || 0) + 1;
+    await inviter.save();
+    
+    const log = new InviteLog({
+      inviterId: inviter._id,
+      inviteeId: user._id,
+      rewardDays
+    });
+    await log.save();
+    
+    res.json({
+      success: true,
+      message: `成功绑定邀请人！您和邀请人各获得 ${rewardDays} 天 VIP`,
+      rewardDays
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ 订阅管理 ============
 app.get('/api/subscriptions', authMiddleware, async (req, res) => {
   try {
@@ -732,6 +922,7 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
     const user = req.user;
     
     const signPassword = attendancePassword || user.attendancePassword || 'Ahgydx@920';
+    const signTime = new Date();
     
     console.log(`🚀 手动签到: ${user.studentId}`);
     
@@ -747,14 +938,15 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
       userId: user._id,
       subscriptionName: '手动签到',
       status: signResult.success ? 'success' : 'failed',
-      message: signResult.message || JSON.stringify(signResult.errors || [])
+      message: signResult.message || JSON.stringify(signResult.errors || []),
+      signTime: signTime
     });
     await log.save();
     
     if (user.isVip && user.emailVerified && user.email) {
       const now = new Date();
       if (user.vipExpireAt && user.vipExpireAt > now) {
-        await sendSignNotification(user.email, user.studentId, signResult, '手动签到');
+        await sendSignNotification(user.email, user.studentId, signResult, '手动签到', signTime);
       }
     }
     
@@ -832,15 +1024,50 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
     const successRate = todaySigns > 0 ? ((todaySuccessSigns / todaySigns) * 100).toFixed(1) : 0;
     
     const activeSubscriptions = await Subscription.countDocuments({ enabled: true });
+    const totalInvites = await InviteLog.countDocuments();
     
     res.json({
       success: true,
       stats: {
         users: { total: totalUsers, vip: vipUsers, today: todayUsers },
         signs: { total: totalSigns, today: todaySigns, success: successSigns, successRate },
-        subscriptions: { active: activeSubscriptions }
+        subscriptions: { active: activeSubscriptions },
+        invites: { total: totalInvites }
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取系统配置
+app.get('/api/admin/config', adminMiddleware, async (req, res) => {
+  try {
+    const configs = await SystemConfig.find();
+    const configMap = {};
+    configs.forEach(c => { configMap[c.key] = c.value; });
+    res.json({ success: true, configs: configMap });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 更新系统配置
+app.put('/api/admin/config/:key', adminMiddleware, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value } = req.body;
+    
+    let config = await SystemConfig.findOne({ key });
+    if (!config) {
+      config = new SystemConfig({ key, value });
+    } else {
+      config.value = value;
+      config.updatedAt = new Date();
+    }
+    await config.save();
+    
+    res.json({ success: true, config });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -926,17 +1153,15 @@ app.delete('/api/admin/users/:id', adminMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
     
-    // 不允许删除自己
     if (user._id.toString() === req.user._id.toString()) {
       return res.status(400).json({ success: false, message: '不能删除自己的账号' });
     }
     
-    // 删除用户相关的所有数据
     await Subscription.deleteMany({ userId: user._id });
     await SignLog.deleteMany({ userId: user._id });
     await EmailCode.deleteMany({ userId: user._id });
+    await InviteLog.deleteMany({ $or: [{ inviterId: user._id }, { inviteeId: user._id }] });
     
-    // 更新卡密（移除使用者信息）
     await Card.updateMany(
       { usedBy: user._id }, 
       { $unset: { usedBy: '', usedAt: '' }, status: 'unused' }
@@ -965,6 +1190,7 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
     }
     
     const signPassword = attendancePassword || targetUser.attendancePassword || 'Ahgydx@920';
+    const signTime = new Date();
     
     console.log(`🚀 管理员 ${req.user.studentId} 为 ${targetUser.studentId} 执行签到`);
     
@@ -980,7 +1206,8 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
       userId: targetUser._id,
       subscriptionName: `管理员代签 (by ${req.user.studentId})`,
       status: signResult.success ? 'success' : 'failed',
-      message: signResult.message || ''
+      message: signResult.message || '',
+      signTime: signTime
     });
     await log.save();
     
@@ -991,7 +1218,8 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
           targetUser.email, 
           targetUser.studentId, 
           signResult, 
-          '管理员代签'
+          '管理员代签',
+          signTime
         );
       }
     }
@@ -1071,9 +1299,12 @@ cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 
 // ============ 启动服务 ============
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 服务器运行在端口 ${PORT}`);
-  console.log(`📍 版本: 3.3.0 (管理员删除用户 + 代签功能)`);
-  console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
-  console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
+
+initSystemConfig().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 服务器运行在端口 ${PORT}`);
+    console.log(`📍 版本: 3.4.0 (邀请功能 + 通知配置 + 邮件宣传 + 时区修复)`);
+    console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
+    console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
+  });
 });
