@@ -1473,7 +1473,7 @@ app.get('/api/admin/cards/export', adminMiddleware, async (req, res) => {
 
 // ============ 定时任务 ============
 cron.schedule('25 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
-cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
+//cron.schedule('30 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 
 // ============ 启动服务 ============
 const PORT = process.env.PORT || 8080;
@@ -1483,6 +1483,6 @@ initSystemConfig().then(() => {
     console.log(`🚀 服务器运行在端口 ${PORT}`);
     console.log(`📍 版本: 3.5.0 (留言反馈系统)`);
     console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
-    console.log(`🤖 自动签到已启用 (每天 21:25 和 21:30)`);
+    console.log(`🤖 自动签到已启用 (每天 21:25 )`);
   });
 });
