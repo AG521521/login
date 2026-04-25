@@ -1395,9 +1395,18 @@ app.post('/api/payment/create-order', authMiddleware, async (req, res) => {
   }
 });
 
+// V免签心跳检测与配置验证
 app.get('/api/payment/notify', (req, res) => {
-  console.log('📡 V免签配置验证成功');
-  res.send('OK'); // 直接返回成功状态即可
+  console.log('📡 收到V免签配置验证请求:', req.query);
+  // 返回标准JSON响应
+  res.json({ 
+    code: 1, 
+    msg: 'ok',
+    data: {
+      heartbeat: 'ok',
+      time: new Date().toISOString()
+    }
+  });
 });
 
 // 接收支付通知（V免签回调）
