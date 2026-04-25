@@ -170,15 +170,18 @@ const paymentOrderSchema = new mongoose.Schema({
   orderNo: { type: String, required: true, unique: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   amount: { type: Number, required: true },
-  days: { type: Number, required: true },
+  days: { type: Number, default: 0 },
+ // times: { type: Number, default: 0 },
+  //cardCategory: { type: String, enum: ['days', 'times'], default: 'days' },
+  payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },
   status: { type: String, enum: ['pending', 'paid', 'expired'], default: 'pending' },
   cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },
   createdAt: { type: Date, default: Date.now },
   paidAt: Date
-  payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },
 });
 
 const PaymentOrder = mongoose.models.PaymentOrder || mongoose.model('PaymentOrder', paymentOrderSchema);
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
