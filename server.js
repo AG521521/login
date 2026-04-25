@@ -1395,6 +1395,11 @@ app.post('/api/payment/create-order', authMiddleware, async (req, res) => {
   }
 });
 
+app.get('/api/payment/notify', (req, res) => {
+  console.log('📡 V免签配置验证成功');
+  res.send('OK'); // 直接返回成功状态即可
+});
+
 // 接收支付通知（V免签回调）
 app.post('/api/payment/notify', async (req, res) => {
   try {
