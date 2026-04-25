@@ -165,16 +165,17 @@ const feedbackSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// 支付订单模型
+// ============ 支付订单模型 ============
 const paymentOrderSchema = new mongoose.Schema({
-  orderNo: { type: String, required: true, unique: true },  // 订单号
+  orderNo: { type: String, required: true, unique: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  amount: { type: Number, required: true },  // 支付金额（元）
-  days: { type: Number, required: true },    // 天数
+  amount: { type: Number, required: true },
+  days: { type: Number, required: true },
   status: { type: String, enum: ['pending', 'paid', 'expired'], default: 'pending' },
-  cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },  // 生成的卡密 ID
+  cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },
   createdAt: { type: Date, default: Date.now },
   paidAt: Date
+  payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },  // ← 新增    
 });
 
 const PaymentOrder = mongoose.models.PaymentOrder || mongoose.model('PaymentOrder', paymentOrderSchema);
@@ -1339,7 +1340,7 @@ const CARD_PACKAGES = [
 ];
 
 // 你的收款码图片 URL（放在 Cloudflare Pages 或图床上）
-const PAY_QR_URL = 'https://login.agai.online/qr-code.png';
+const PAY_QR_URL = 'https://login.agai.online/vxcode.png';
 
 // 获取套餐列表
 app.get('/api/payment/packages', authMiddleware, async (req, res) => {
@@ -1498,6 +1499,100 @@ app.get('/api/payment/order/:orderNo', authMiddleware, async (req, res) => {
       // 如果已支付，返回卡密
       cardCode: order.status === 'paid' && order.cardId ? 
         (await Card.findById(order.cardId))?.code : null
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 支付 API ============
+
+// 卡密套餐配置（可根据需要修改价格）
+const CARD_PACKAGES = [
+  { days: 30, price: 9.9, name: '30天VIP卡', description: '适合短期使用' },
+  { days: 120, price: 32.8, name: '一学期VIP卡', description: '性价比之选（上岸吧）' },
+  { days: 365, price: 53.2 , name: '一学年VIP卡', description: '年度最划算（我上岸）' }
+];
+
+// 收款码图片地址
+const PAY_QR_URLS = {
+  wechat: 'https://login.agai.online/vxcode.png',   // 微信收款码
+  alipay: 'https://login.agai.online/zfbcode.png'    // 支付宝收款码
+};
+
+// 获取套餐列表
+app.get('/api/payment/packages', authMiddleware, async (req, res) => {
+  res.json({ success: true, packages: CARD_PACKAGES });
+});
+
+// 创建订单
+app.post('/api/payment/create-order', authMiddleware, async (req, res) => {
+  try {
+    const { days } = req.body;
+    const user = req.user;
+    
+    const pkg = CARD_PACKAGES.find(p => p.days === parseInt(days));
+    if (!pkg) {
+      return res.status(400).json({ success: false, message: '无效的套餐' });
+    }
+    
+    const orderNo = 'PAY' + Date.now() + Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    const order = new PaymentOrder({
+      orderNo,
+      userId: user._id,
+      amount: pkg.price,
+      days: pkg.days,
+      status: 'pending'
+      payMethod: payMethod || 'wechat'         
+    });
+    await order.save();
+
+    // 根据支付方式返回对应的收款码
+    const qrCodeUrl = PAY_QR_URLS[payMethod] || PAY_QR_URLS.wechat;
+    res.json({
+      success: true,
+      order: {
+        orderNo: order.orderNo,
+        amount: order.amount,
+        days: order.days,
+        qrCodeUrl: PAY_QR_URL
+      }
+     qrCodeUrl: qrCodeUrl  // ← 返回对应收款码        
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 查询订单状态
+app.get('/api/payment/order/:orderNo', authMiddleware, async (req, res) => {
+  try {
+    const order = await PaymentOrder.findOne({ 
+      orderNo: req.params.orderNo,
+      userId: req.user._id 
+    });
+    
+    if (!order) {
+      return res.status(404).json({ success: false, message: '订单不存在' });
+    }
+    
+    let cardCode = null;
+    if (order.status === 'paid' && order.cardId) {
+      const card = await Card.findById(order.cardId);
+      cardCode = card ? card.code : null;
+    }
+    
+    res.json({
+      success: true,
+      order: {
+        orderNo: order.orderNo,
+        amount: order.amount,
+        days: order.days,
+        status: order.status,
+        paidAt: order.paidAt
+      },
+      cardCode: cardCode
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
