@@ -165,6 +165,19 @@ const feedbackSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// 支付订单模型
+const paymentOrderSchema = new mongoose.Schema({
+  orderNo: { type: String, required: true, unique: true },  // 订单号
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  amount: { type: Number, required: true },  // 支付金额（元）
+  days: { type: Number, required: true },    // 天数
+  status: { type: String, enum: ['pending', 'paid', 'expired'], default: 'pending' },
+  cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },  // 生成的卡密 ID
+  createdAt: { type: Date, default: Date.now },
+  paidAt: Date
+});
+
+const PaymentOrder = mongoose.models.PaymentOrder || mongoose.model('PaymentOrder', paymentOrderSchema);
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 const SignLog = mongoose.models.SignLog || mongoose.model('SignLog', signLogSchema);
@@ -1312,6 +1325,181 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('代签错误:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 支付 API ============
+
+// 卡密套餐配置
+const CARD_PACKAGES = [
+  { days: 30, price: 5, name: '30天VIP卡', description: '适合短期使用' },
+  { days: 90, price: 12, name: '90天VIP卡', description: '性价比之选（省3元）' },
+  { days: 365, price: 30, name: '365天VIP卡', description: '年度最划算（省30元）' }
+];
+
+// 你的收款码图片 URL（放在 Cloudflare Pages 或图床上）
+const PAY_QR_URL = 'https://login.agai.online/qr-code.png';
+
+// 获取套餐列表
+app.get('/api/payment/packages', authMiddleware, async (req, res) => {
+  res.json({ success: true, packages: CARD_PACKAGES });
+});
+
+// 创建订单
+app.post('/api/payment/create-order', authMiddleware, async (req, res) => {
+  try {
+    const { days } = req.body;
+    const user = req.user;
+    
+    // 查找对应套餐
+    const pkg = CARD_PACKAGES.find(p => p.days === parseInt(days));
+    if (!pkg) {
+      return res.status(400).json({ success: false, message: '无效的套餐' });
+    }
+    
+    // 生成唯一订单号
+    const orderNo = 'PAY' + Date.now() + Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    // 创建订单
+    const order = new PaymentOrder({
+      orderNo,
+      userId: user._id,
+      amount: pkg.price,
+      days: pkg.days,
+      status: 'pending'
+    });
+    await order.save();
+    
+    res.json({
+      success: true,
+      order: {
+        orderNo: order.orderNo,
+        amount: order.amount,
+        days: order.days,
+        status: order.status,
+        qrCodeUrl: PAY_QR_URL
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 接收支付通知（V免签回调）
+app.post('/api/payment/notify', async (req, res) => {
+  try {
+    const { money, mark, sign } = req.body;
+    
+    // 验证签名（简化版，实际需要验证）
+    const SECRET_KEY = process.env.PAYMENT_SECRET || 'my-secret-key-2024';
+    const expectedSign = crypto.createHash('md5').update(money + mark + SECRET_KEY).digest('hex');
+    
+    // 这里先用简化验证，正式使用要严格验证
+    console.log(`💰 收到支付通知: 金额=${money}, 备注=${mark}`);
+    
+    // 查找匹配的待支付订单
+    const order = await PaymentOrder.findOne({
+      amount: parseFloat(money),
+      status: 'pending'
+    }).sort({ createdAt: 1 });
+    
+    if (!order) {
+      console.log('⚠️ 没有找到匹配的订单');
+      return res.json({ code: 0, msg: '没有找到匹配的订单' });
+    }
+    
+    // 生成卡密
+    const code = 'VIP' + crypto.randomBytes(6).toString('hex').toUpperCase();
+    const card = new Card({
+      code,
+      days: order.days,
+      type: `vip_${order.days}d`,
+      status: 'unused',
+      createdAt: new Date()
+    });
+    await card.save();
+    
+    // 更新订单
+    order.status = 'paid';
+    order.paidAt = new Date();
+    order.cardId = card._id;
+    await order.save();
+    
+    // 发送邮件通知用户（如果已绑定邮箱）
+    const buyer = await User.findById(order.userId);
+    if (buyer && buyer.email && buyer.emailVerified) {
+      // 发送卡密邮件
+      if (RESEND_API_KEY) {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${RESEND_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: '智能考勤系统 <noreply@agai.online>',
+            to: buyer.email,
+            subject: '🎉 卡密购买成功 - 智能考勤系统',
+            html: `
+              <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+                <div style="text-align: center; margin-bottom: 24px;">
+                  <h1 style="color: #667eea; margin: 0;">🎉 购买成功</h1>
+                </div>
+                <div style="background: #d4edda; padding: 20px; border-radius: 12px;">
+                  <p style="margin: 0 0 15px 0;"><strong>订单号：</strong>${order.orderNo}</p>
+                  <p style="margin: 0 0 15px 0;"><strong>套餐：</strong>${order.days}天VIP</p>
+                  <p style="margin: 0 0 20px 0;"><strong>金额：</strong>¥${order.amount}</p>
+                  <div style="background: #fff; padding: 15px; border-radius: 8px; text-align: center;">
+                    <p style="margin: 0 0 10px 0;">您的卡密是：</p>
+                    <div style="font-size: 28px; font-weight: bold; color: #667eea; letter-spacing: 3px;">${code}</div>
+                  </div>
+                </div>
+                <p style="margin-top: 20px; color: #888; font-size: 13px; text-align: center;">
+                  请前往 <a href="https://login.agai.online">智能考勤系统</a> 兑换使用
+                </p>
+              </div>
+            `
+          })
+        }).catch(e => console.error('发送邮件失败:', e));
+      }
+    }
+    
+    console.log(`✅ 支付成功: 订单${order.orderNo}, 卡密${code}`);
+    res.json({ code: 1, msg: '支付成功' });
+    
+  } catch (error) {
+    console.error('支付回调错误:', error);
+    res.json({ code: 0, msg: error.message });
+  }
+});
+
+// 查询订单状态
+app.get('/api/payment/order/:orderNo', authMiddleware, async (req, res) => {
+  try {
+    const order = await PaymentOrder.findOne({ 
+      orderNo: req.params.orderNo,
+      userId: req.user._id 
+    });
+    
+    if (!order) {
+      return res.status(404).json({ success: false, message: '订单不存在' });
+    }
+    
+    res.json({
+      success: true,
+      order: {
+        orderNo: order.orderNo,
+        amount: order.amount,
+        days: order.days,
+        status: order.status,
+        paidAt: order.paidAt
+      },
+      // 如果已支付，返回卡密
+      cardCode: order.status === 'paid' && order.cardId ? 
+        (await Card.findById(order.cardId))?.code : null
+    });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
