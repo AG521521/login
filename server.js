@@ -175,7 +175,7 @@ const paymentOrderSchema = new mongoose.Schema({
   cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },
   createdAt: { type: Date, default: Date.now },
   paidAt: Date
-  payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },  // ← 新增    
+  payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },
 });
 
 const PaymentOrder = mongoose.models.PaymentOrder || mongoose.model('PaymentOrder', paymentOrderSchema);
