@@ -1334,6 +1334,14 @@ app.post('/api/admin/sign/:userId', adminMiddleware, async (req, res) => {
 });
 
 // ============ 支付 API ============
+// 收款码图片地址
+const PAY_QR_URLS = {
+  wechat: 'https://login.agai.online/vxcode.png',   // 微信收款码
+  alipay: 'https://login.agai.online/zfbcode.png'    // 支付宝收款码
+};
+
+// 默认收款码（兼容旧版）
+const PAY_QR_URL = PAY_QR_URLS.wechat;
 // 卡密套餐配置
 const CARD_PACKAGES = [
   { days: 30, price: 9.9, name: '30天VIP卡', description: '适合短期使用' },
@@ -1341,11 +1349,7 @@ const CARD_PACKAGES = [
   { days: 365, price: 53.2 , name: '一学年VIP卡', description: '年度最划算（我上岸）' }
 ];
 
-// 收款码图片地址
-const PAY_QR_URLS = {
-  wechat: 'https://login.agai.online/vxcode.png',   // 微信收款码
-  alipay: 'https://login.agai.online/zfbcode.png'    // 支付宝收款码
-};
+
 // 获取套餐列表
 app.get('/api/payment/packages', authMiddleware, async (req, res) => {
   res.json({ success: true, packages: CARD_PACKAGES });
