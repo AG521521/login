@@ -12,8 +12,40 @@ const cron = require('node-cron');
 const { spawn } = require('child_process');
 const path = require('path');
 const crypto = require('crypto');
-
+const http = require('http');
+const { Server } = require('socket.io');
 const app = express();
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
+// ============ WebSocket 用户映射 ============
+const userSockets = new Map();
+
+io.on('connection', (socket) => {
+  console.log('🔌 WebSocket 客户端已连接:', socket.id);
+  
+  socket.on('bindUser', (userId) => {
+    if (userId) {
+      userSockets.set(userId, socket.id);
+      console.log(`👤 用户 ${userId} 绑定 WebSocket: ${socket.id}`);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    for (const [uid, sid] of userSockets.entries()) {
+      if (sid === socket.id) {
+        userSockets.delete(uid);
+        console.log(`👤 用户 ${uid} 断开 WebSocket`);
+      }
+    }
+  });
+});
 
 // ============ CORS 配置 ============
 const allowedOrigins = [
@@ -1342,6 +1374,26 @@ const PAY_QR_URLS = {
 
 // 默认收款码（兼容旧版）
 const PAY_QR_URL = PAY_QR_URLS.wechat;
+
+// ============ 生成唯一金额 ============
+async function generateUniqueAmount(basePrice) {
+  for (let i = 0; i < 10; i++) {
+    const offset = parseFloat((Math.random() * 0.09 + 0.01).toFixed(2));
+    const amount = parseFloat((basePrice + offset).toFixed(2));
+
+    const exists = await PaymentOrder.findOne({
+      amount,
+      status: 'pending',
+      createdAt: { $gt: new Date(Date.now() - 30 * 60 * 1000) }  // 30分钟内的待支付订单
+    });
+
+    if (!exists) return amount;
+  }
+
+  // 如果 10 次都没生成唯一金额，加一个时间戳后缀
+  const timestamp = Date.now().toString().slice(-2);
+  return parseFloat((basePrice + parseFloat('0.' + timestamp)).toFixed(2));
+}
 // 卡密套餐配置
 const CARD_PACKAGES = [
   { days: 30, price: 9.9, name: '30天VIP卡', description: '适合短期使用' },
@@ -1358,36 +1410,54 @@ app.get('/api/payment/packages', authMiddleware, async (req, res) => {
 // 创建订单
 app.post('/api/payment/create-order', authMiddleware, async (req, res) => {
   try {
-    const { days } = req.body;
+    const { days, times, cardCategory, payMethod } = req.body;
     const user = req.user;
     
-    // 查找对应套餐
-    const pkg = CARD_PACKAGES.find(p => p.days === parseInt(days));
+    // 根据类别查找套餐
+    let pkg;
+    if (cardCategory === 'times') {
+      pkg = CARD_PACKAGES.find(p => p.times === parseInt(times) && p.cardCategory === 'times');
+    } else {
+      pkg = CARD_PACKAGES.find(p => p.days === parseInt(days) && p.cardCategory === 'days');
+    }
+    
     if (!pkg) {
       return res.status(400).json({ success: false, message: '无效的套餐' });
     }
     
-    // 生成唯一订单号
+    // 生成唯一金额
+    const amount = await generateUniqueAmount(pkg.price);
+    
     const orderNo = 'PAY' + Date.now() + Math.random().toString(36).substring(2, 8).toUpperCase();
     
-    // 创建订单
     const order = new PaymentOrder({
       orderNo,
       userId: user._id,
-      amount: pkg.price,
+      amount,
       days: pkg.days,
-      status: 'pending'
+      times: pkg.times,
+      cardCategory: pkg.cardCategory,
+      payMethod: payMethod || 'wechat',
+      status: 'pending',
+      expireAt: new Date(Date.now() + 30 * 60 * 1000)  // 30分钟过期
     });
     await order.save();
     
+    // 返回双收款码
     res.json({
       success: true,
       order: {
         orderNo: order.orderNo,
         amount: order.amount,
         days: order.days,
-        status: order.status,
-        qrCodeUrl: PAY_QR_URL
+        times: order.times,
+        cardCategory: order.cardCategory,
+        payMethod: order.payMethod,
+        expireAt: order.expireAt
+      },
+      qrCodes: {
+        wechat: PAY_QR_URLS.wechat,
+        alipay: PAY_QR_URLS.alipay
       }
     });
   } catch (error) {
@@ -1448,6 +1518,20 @@ app.post('/api/payment/notify', async (req, res) => {
     order.paidAt = new Date();
     order.cardId = card._id;
     await order.save();
+    
+    // ========== WebSocket 实时推送 ==========
+    const socketId = userSockets.get(order.userId.toString());
+    if (socketId) {
+      io.to(socketId).emit('paymentSuccess', {
+        orderNo: order.orderNo,
+        cardCode: code,
+        amount: order.amount,
+        days: order.days,
+        times: order.times,
+        cardCategory: order.cardCategory
+      });
+      console.log(`📡 WebSocket 推送支付成功: 用户=${order.userId}, 卡密=${code}`);
+    }
     
     // 发送邮件通知用户（如果已绑定邮箱）
     const buyer = await User.findById(order.userId);
@@ -1690,10 +1774,12 @@ cron.schedule('25 21 * * *', executeAutoSign, { timezone: "Asia/Shanghai" });
 const PORT = process.env.PORT || 8080;
 
 initSystemConfig().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
+  // 使用 server.listen 而不是 app.listen（支持 WebSocket）
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 服务器运行在端口 ${PORT}`);
-    console.log(`📍 版本: 3.5.1 (留言反馈系统)`);
+    console.log(`📍 版本: 3.6.0 (V免签升级 + WebSocket实时推送)`);
     console.log(`📧 邮件服务: ${RESEND_API_KEY ? 'Resend 已配置' : '未配置'}`);
-    console.log(`🤖 自动签到已启用 (每天 21:25 )`);
+    console.log(`🤖 自动签到已启用 (每天 21:25)`);
+    console.log(`🔌 WebSocket 已启用`);
   });
 });
