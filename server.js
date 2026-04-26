@@ -1396,11 +1396,10 @@ async function generateUniqueAmount(basePrice) {
   return parseFloat((basePrice + parseFloat('0.' + timestamp)).toFixed(2));
 }
 // 卡密套餐配置
-// 卡密套餐配置
 const CARD_PACKAGES = [
   { days: 30, times: 0, cardCategory: 'days', price: 9.9, name: '30天VIP卡', description: '适合短期使用' },
   { days: 120, times: 0, cardCategory: 'days', price: 32.8, name: '一学期VIP卡', description: '性价比之选（上岸吧）' },
-  { days: 365, times: 0, cardCategory: 'days', price: 53.2, name: '一学年VIP卡', description: '年度最划算（我上岸）' }
+  { days: 365, times: 0, cardCategory: 'days', price: 53.2, name: '一学年VIP卡', description: '年度最划算（我上岸）' },
   // 如果以后需要次数卡，可以在这里追加
    { days: 0, times: 10, cardCategory: 'times', price: 9.9, name: '10次签到卡', description: '可签到10次，不限时间' }
 ];
