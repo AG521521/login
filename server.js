@@ -203,11 +203,12 @@ const paymentOrderSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   amount: { type: Number, required: true },
   days: { type: Number, default: 0 },
- // times: { type: Number, default: 0 },
-  //cardCategory: { type: String, enum: ['days', 'times'], default: 'days' },
+  times: { type: Number, default: 0 },
+  cardCategory: { type: String, enum: ['days', 'times'], default: 'days' },
   payMethod: { type: String, enum: ['wechat', 'alipay'], default: 'wechat' },
   status: { type: String, enum: ['pending', 'paid', 'expired'], default: 'pending' },
   cardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Card' },
+  expireAt: { type: Date },  // ← 新增：订单过期时间
   createdAt: { type: Date, default: Date.now },
   paidAt: Date
 });
