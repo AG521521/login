@@ -1400,7 +1400,7 @@ const CARD_PACKAGES = [
   { days: 30, times: 0, cardCategory: 'days', price: 9.9, name: '30天VIP卡', description: '适合短期使用' },
   { days: 120, times: 0, cardCategory: 'days', price: 32.8, name: '一学期VIP卡', description: '性价比之选（上岸吧）' },
   { days: 365, times: 0, cardCategory: 'days', price: 53.2, name: '一学年VIP卡', description: '年度最划算（我上岸）' },
-  { days: 999, times: 0, cardCategory: 'days', price: 0.01, name: '测试用勿拍', description: '仅测试' },
+  { days: 0, times: 0, cardCategory: 'days', price: 0.01, name: '测试用勿拍', description: '仅测试' },
   // 如果以后需要次数卡，可以在这里追加
    { days: 0, times: 30, cardCategory: 'times', price: 19.9, name: '30次签到卡', description: '可签到30次，永久有效' },
    { days: 0, times: 10, cardCategory: 'times', price: 8.8, name: '10次签到卡', description: '可签到10次，永久有效' }
