@@ -787,6 +787,99 @@ app.post('/api/email/verify', authMiddleware, async (req, res) => {
   }
 });
 
+// ============ 换绑邮箱 ============
+app.post('/api/email/rebind', authMiddleware, async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    const user = req.user;
+    
+    // 检查是否已绑定邮箱
+    if (!user.emailVerified) {
+      return res.status(400).json({ success: false, message: '您还没有绑定邮箱，请先绑定' });
+    }
+    
+    if (!email || !code) {
+      return res.status(400).json({ success: false, message: '请填写新邮箱和验证码' });
+    }
+    
+    // 不能换绑成同一个邮箱
+    if (email === user.email) {
+      return res.status(400).json({ success: false, message: '新邮箱不能和当前邮箱相同' });
+    }
+    
+    // 检查新邮箱是否已被其他人绑定
+    const existingUser = await User.findOne({ email, _id: { $ne: user._id } });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: '该邮箱已被其他用户绑定' });
+    }
+    
+    // 验证验证码
+    const emailCode = await EmailCode.findOne({ email, code, used: false });
+    if (!emailCode) {
+      return res.status(400).json({ success: false, message: '验证码错误' });
+    }
+    
+    if (emailCode.expiresAt < new Date()) {
+      return res.status(400).json({ success: false, message: '验证码已过期' });
+    }
+    
+    // 标记验证码已使用
+    emailCode.used = true;
+    await emailCode.save();
+    
+    // 更新邮箱
+    const oldEmail = user.email;
+    user.email = email;
+    await user.save();
+    
+    console.log(`📧 用户 ${user.studentId} 换绑邮箱: ${oldEmail} → ${email}`);
+    
+    // 发送通知邮件到新邮箱
+    if (RESEND_API_KEY) {
+      try {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${RESEND_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: '智能考勤系统 <noreply@agai.online>',
+            to: email,
+            subject: '邮箱换绑成功 - 智能考勤系统',
+            html: `
+              <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+                <div style="text-align: center; margin-bottom: 24px;">
+                  <h1 style="color: #667eea; margin: 0;">📋 智能考勤系统</h1>
+                </div>
+                <p>您的绑定邮箱已成功更换为：<strong>${email}</strong></p>
+                <p>原邮箱 <strong>${oldEmail}</strong> 将不再接收签到通知。</p>
+                <hr style="margin: 24px 0;">
+                <p style="color: #999; font-size: 12px; text-align: center;">
+                  如果这不是您本人的操作，请联系管理员
+                </p>
+              </div>
+            `
+          })
+        });
+      } catch (e) {
+        console.error('发送换绑通知失败:', e);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: '邮箱换绑成功',
+      user: {
+        email: user.email,
+        emailVerified: user.emailVerified
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ 卡密兑换 ============
 app.post('/api/vip/redeem', authMiddleware, async (req, res) => {
   try {
