@@ -311,13 +311,13 @@ async function sendVerificationCode(email, code) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: '智能考勤系统 <noreply@agai.online>',
+        from: 'AG工作室 <noreply@agai.online>',
         to: email,
-        subject: '邮箱验证码 - 智能考勤系统',
+        subject: '邮箱验证码 - AG工作室',
         html: `
           <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
             <div style="text-align: center; margin-bottom: 24px;">
-              <h1 style="color: #667eea; margin: 0;">📋 智能考勤系统</h1>
+              <h1 style="color: #667eea; margin: 0;">📋 AG工作室</h1>
               <p style="color: #888; margin: 5px 0 0;">AG工作室</p>
             </div>
             <p style="font-size: 16px;">您的邮箱验证码是：</p>
@@ -379,7 +379,7 @@ async function sendSignNotification(email, studentId, result, subscriptionName, 
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: '智能考勤系统 <noreply@agai.online>',
+        from: 'AG工作室 <noreply@agai.online>',
         to: email,
         subject: `${emoji} 签到${statusText}通知 - ${subscriptionName}`,
         html: `
@@ -844,13 +844,13 @@ app.post('/api/email/rebind', authMiddleware, async (req, res) => {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            from: '智能考勤系统 <noreply@agai.online>',
+            from: 'AG工作室 <noreply@agai.online>',
             to: email,
-            subject: '邮箱换绑成功 - 智能考勤系统',
+            subject: '邮箱换绑成功 - AG工作室',
             html: `
               <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
                 <div style="text-align: center; margin-bottom: 24px;">
-                  <h1 style="color: #667eea; margin: 0;">📋 智能考勤系统</h1>
+                  <h1 style="color: #667eea; margin: 0;">📋 AG工作室</h1>
                 </div>
                 <p>您的绑定邮箱已成功更换为：<strong>${email}</strong></p>
                 <p>原邮箱 <strong>${oldEmail}</strong> 将不再接收签到通知。</p>
@@ -1643,9 +1643,9 @@ app.post('/api/payment/notify', async (req, res) => {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            from: '智能考勤系统 <noreply@agai.online>',
+            from: 'AG工作室 <noreply@agai.online>',
             to: buyer.email,
-            subject: '🎉 卡密购买成功 - 智能考勤系统',
+            subject: '🎉 卡密购买成功 - AG工作室',
             html: `
               <div style="max-width: 450px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
                 <div style="text-align: center; margin-bottom: 24px;">
@@ -1661,7 +1661,7 @@ app.post('/api/payment/notify', async (req, res) => {
                   </div>
                 </div>
                 <p style="margin-top: 20px; color: #888; font-size: 13px; text-align: center;">
-                  请前往 <a href="https://login.agai.online">智能考勤系统</a> 兑换使用
+                  请前往 <a href="https://login.agai.online">AG工作室</a> 兑换使用
                 </p>
               </div>
             `
