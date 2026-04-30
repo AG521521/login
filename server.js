@@ -426,39 +426,78 @@ async function sendSignNotification(email, studentId, result, subscriptionName, 
   }
 }
 
+
 // ============ 调用 Python 签到脚本 ============
 async function realSign(studentId, password, maxRetries = 3) {
   return new Promise((resolve) => {
     const pythonScript = path.join(__dirname, 'attendance_runner.py');
-    const pythonProcess = spawn('python3', [pythonScript]);
+    const pythonProcess = spawn('python3', [pythonScript], {
+      timeout: 60000  // 60秒超时
+    });
     
     let output = '';
     let errorOutput = '';
+    let isResolved = false;
     
-    pythonProcess.stdout.on('data', (data) => { output += data.toString(); });
-    pythonProcess.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    // 超时处理
+    const timeout = setTimeout(() => {
+      if (!isResolved) {
+        isResolved = true;
+        pythonProcess.kill();
+        console.error('⏰ Python 脚本执行超时');
+        resolve({ success: false, message: '签到脚本执行超时', errors: ['执行超时'] });
+      }
+    }, 55000);  // 55秒超时
+    
+    pythonProcess.stdout.on('data', (data) => { 
+      output += data.toString(); 
+      console.log('Python stdout:', data.toString().substring(0, 200));
+    });
+    
+    pythonProcess.stderr.on('data', (data) => { 
+      errorOutput += data.toString();
+      console.error('Python stderr:', data.toString());
+    });
     
     pythonProcess.on('close', (code) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(timeout);
+      
+      console.log(`Python 进程退出，代码: ${code}`);
+      console.log('Python stdout 长度:', output.length);
+      console.log('Python stderr 长度:', errorOutput.length);
+      
       if (code !== 0) {
-        resolve({ success: false, message: '脚本执行失败', errors: [errorOutput] });
+        resolve({ success: false, message: '脚本执行失败', errors: [errorOutput || '未知错误'] });
         return;
       }
       try {
-        resolve(JSON.parse(output));
+        const result = JSON.parse(output);
+        resolve(result);
       } catch (e) {
-        resolve({ success: false, message: '解析失败', errors: [output] });
+        console.error('解析 Python 输出失败:', output.substring(0, 500));
+        resolve({ success: false, message: '解析失败', errors: [output.substring(0, 200)] });
       }
     });
     
-    pythonProcess.on('error', () => {
-      resolve({ success: false, message: 'Python 环境异常' });
+    pythonProcess.on('error', (err) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(timeout);
+      console.error('Python 进程启动失败:', err);
+      resolve({ success: false, message: '无法启动签到脚本', errors: [err.message] });
     });
     
-    pythonProcess.stdin.write(JSON.stringify({
+    // 发送输入数据
+    const inputData = JSON.stringify({
       action: 'sign_single',
       user: { studentId, password },
       maxRetries
-    }));
+    });
+    
+    console.log('发送给 Python 的数据:', inputData.substring(0, 100));
+    pythonProcess.stdin.write(inputData);
     pythonProcess.stdin.end();
   });
 }
