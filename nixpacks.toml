@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_18", "python311"]
+
+[phases.install]
+cmds = [
+  "npm install",
+  "pip install -r requirements.txt"
+]
+
+[start]
+cmd = "node server.js"
