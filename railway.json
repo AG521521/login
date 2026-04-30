@@ -2,7 +2,13 @@
   "build": {
     "builder": "NIXPACKS",
     "nixpacksPlan": {
-      "providers": ["node", "python"]
+      "providers": ["node", "python"],
+      "buildImage": "ghcr.io/railwayapp/nixpacks:ubuntu-1745885067"
+    },
+    "config": {
+      "python": {
+        "version": "3.11"
+      }
     }
   }
 }
