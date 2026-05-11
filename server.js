@@ -16,7 +16,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
-
+const PlantData = require('./models/PlantData');//zhiwu
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -609,6 +609,33 @@ async function executeAutoSign() {
 }
 
 // ============ API 路由 ============
+// ============ 植物工厂数据接口 ============
+
+// 1. 接收ESP8266上传的数据（POST）
+app.post('/api/plant/data', async (req, res) => {
+    try {
+        const data = await PlantData.create(req.body);
+        console.log('✅ 收到植物工厂数据:', req.body.temperature + '°C');
+        res.json({ success: true, id: data._id });
+    } catch (err) {
+        console.error('❌ 存储失败:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 2. 前端拉取最新数据（GET）
+app.get('/api/plant/data', async (req, res) => {
+    try {
+        const data = await PlantData.findOne().sort({ createdAt: -1 });
+        if (!data) {
+            return res.json({ error: '暂无数据' });
+        }
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', time: getBeijingTime() });
