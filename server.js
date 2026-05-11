@@ -645,6 +645,27 @@ app.get('/', (req, res) => {
   res.json({ status: 'running', version: '3.5.0', emailService: RESEND_API_KEY ? 'Resend' : '未配置' });
 });
 
+// 3. 接收Web端控制指令，暂存后由ESP8266轮询拉取（或直接透传）
+app.post('/api/plant/control', async (req, res) => {
+    try {
+        // 这里先返回成功，后续可对接ESP8266
+        console.log('🔧 收到控制指令:', JSON.stringify(req.body));
+        res.json({ success: true, message: '指令已收到' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 4. 接收模式切换指令
+app.post('/api/plant/mode', async (req, res) => {
+    try {
+        console.log('🔧 收到模式切换:', JSON.stringify(req.body));
+        res.json({ success: true, message: '模式已切换' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // ============ 登录 ============
 app.post('/api/login', async (req, res) => {
   try {
