@@ -17,6 +17,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const PlantData = require('./PlantData');//zhiwu
+const ControlCmd = require('./ControlCmd');
 const io = new Server(server, {
   cors: {
     origin: '*',
