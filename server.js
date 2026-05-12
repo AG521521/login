@@ -610,13 +610,13 @@ async function executeAutoSign() {
 }
 
 // ============ API 路由 ============
-// ============ 植物工厂数据接口 ============
+// ========== 植物工厂数据接口 ==========
 
-// 1. 接收ESP8266上传的数据（POST）
+// 1. ESP8266 上传传感器数据 + AI 结果
 app.post('/api/plant/data', async (req, res) => {
     try {
         const data = await PlantData.create(req.body);
-        console.log('✅ 收到植物工厂数据:', req.body.temperature + '°C');
+        console.log('✅ 收到植物数据:', req.body.temperature + '°C');
         res.json({ success: true, id: data._id });
     } catch (err) {
         console.error('❌ 存储失败:', err.message);
@@ -624,16 +624,58 @@ app.post('/api/plant/data', async (req, res) => {
     }
 });
 
-// 2. 前端拉取最新数据（GET）
+// 2. 前端拉取最新一条数据
 app.get('/api/plant/data', async (req, res) => {
     try {
         const data = await PlantData.findOne().sort({ createdAt: -1 });
-        if (!data) {
-            return res.json({ error: '暂无数据' });
-        }
+        if (!data) return res.json({ error: '暂无数据' });
         res.json(data);
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// 3. 前端拉取历史数据（图表用，默认最近100条）
+app.get('/api/plant/data/history', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 100;
+        const data = await PlantData.find()
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .select('temperature humidity light air_quality health_score createdAt');
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 4. 前端提交控制指令
+app.post('/api/plant/control', async (req, res) => {
+    try {
+        const cmd = await ControlCmd.create({
+            ...req.body,
+            status: 'pending',
+            createdAt: new Date()
+        });
+        console.log('🔧 收到控制指令:', JSON.stringify(req.body));
+        res.json({ success: true, id: cmd._id });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 5. ESP8266 轮询拉取待执行的控制指令
+app.get('/api/plant/control/pending', async (req, res) => {
+    try {
+        const cmd = await ControlCmd.findOneAndUpdate(
+            { status: 'pending' },
+            { status: 'executed' },
+            { sort: { createdAt: 1 }, new: true }
+        );
+        if (!cmd) return res.json({ hasCommand: false });
+        res.json({ hasCommand: true, command: cmd });
+    } catch (err) {
+        res.status(500).json({ hasCommand: false, error: err.message });
     }
 });
 
