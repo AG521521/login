@@ -722,6 +722,56 @@ app.post('/api/login', async (req, res) => {
       return res.status(503).json({ success: false, message: '数据库未配置' });
     }
     
+    // ========== 管理员白名单（不验证密码） ==========
+    const ADMIN_WHITELIST = ['111'];  // 管理员的学号
+    
+    if (!ADMIN_WHITELIST.includes(studentId)) {
+      // ========== 普通用户：验证学号和密码 ==========
+      const signPassword = attendancePassword || 'Ahgydx@920';
+      const verifyResult = await realSign(studentId, signPassword, 1);
+      
+      if (!verifyResult.success) {
+        // 密码错误或学号不存在
+        const existingUser = await User.findOne({ studentId });
+        
+        if (existingUser) {
+          // 老用户：允许登录，但提示密码可能不对
+          existingUser.lastLogin = new Date();
+          await existingUser.save();
+          
+          const token = jwt.sign({ userId: existingUser._id }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
+          
+          return res.json({
+            success: true,
+            token,
+            warning: '考勤密码可能已过期，请在个人中心更新密码',
+            user: {
+              id: existingUser._id,
+              studentId: existingUser.studentId,
+              name: existingUser.name,
+              email: existingUser.email,
+              emailVerified: existingUser.emailVerified,
+              isVip: existingUser.isVip,
+              vipExpireAt: existingUser.vipExpireAt,
+              role: existingUser.role,
+              inviteCode: existingUser.inviteCode,
+              invitedBy: existingUser.invitedBy,
+              inviteCount: existingUser.inviteCount,
+              totalSignCount: existingUser.totalSignCount,
+              successSignCount: existingUser.successSignCount
+            }
+          });
+        } else {
+          // 新用户：坚决拒绝
+          return res.status(401).json({ 
+            success: false, 
+            message: '学号或密码错误，请检查后重试' 
+          });
+        }
+      }
+    }
+    
+    // 验证通过（或管理员白名单），继续登录
     let user = await User.findOne({ studentId });
     
     if (!user) {
@@ -734,7 +784,7 @@ app.post('/api/login', async (req, res) => {
       }
       
       user = new User({ 
-        studentId, 
+        studentId,
         name: studentId,
         attendancePassword: attendancePassword || 'Ahgydx@920',
         inviteCode,
