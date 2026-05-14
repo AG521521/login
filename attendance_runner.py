@@ -272,42 +272,42 @@ async def main():
         input_data = json.loads(sys.stdin.read())
         action = input_data.get('action', 'sign_single')
 
-        if action == 'verify':
-    # 只验证密码：获取 Token 即可，不跑完整签到流程
-    user_data = input_data.get('user', {})
-    user = User(
-        student_Id=str(user_data.get('studentId')),
-        password=user_data.get('password', 'Ahgydx@920')
-    )
-    try:
-        async with user.session.post(
-            url=WEB_DICT["token_api"],
-            params=generate_params(user),
-            headers=generate_header(user)
-        ) as resp:
-            token_result = await resp.json()
-        
-        if 'refresh_token' in token_result:
-            print(json.dumps({
-                'success': True,
-                'username': token_result.get('userName', ''),
-                'message': '密码正确'
-            }, ensure_ascii=False))
-        else:
-            error_desc = token_result.get('error_description', '未知错误')
-            if "Bad credentials" in error_desc:
-                error_desc = "学号或密码错误"
+            if action == 'verify':
+        # 只验证密码：获取 Token 即可，不跑完整签到流程
+        user_data = input_data.get('user', {})
+        user = User(
+            student_Id=str(user_data.get('studentId')),
+            password=user_data.get('password', 'Ahgydx@920')
+        )
+        try:
+            async with user.session.post(
+                url=WEB_DICT["token_api"],
+                params=generate_params(user),
+                headers=generate_header(user)
+            ) as resp:
+                token_result = await resp.json()
+            
+            if 'refresh_token' in token_result:
+                print(json.dumps({
+                    'success': True,
+                    'username': token_result.get('userName', ''),
+                    'message': '密码正确'
+                }, ensure_ascii=False))
+            else:
+                error_desc = token_result.get('error_description', '未知错误')
+                if "Bad credentials" in error_desc:
+                    error_desc = "学号或密码错误"
+                print(json.dumps({
+                    'success': False,
+                    'message': error_desc
+                }, ensure_ascii=False))
+        except Exception as e:
             print(json.dumps({
                 'success': False,
-                'message': error_desc
+                'message': str(e)
             }, ensure_ascii=False))
-    except Exception as e:
-        print(json.dumps({
-            'success': False,
-            'message': str(e)
-        }, ensure_ascii=False))
-    finally:
-        await user.close()
+        finally:
+            await user.close()
         
         if action == 'sign_single':
             user_data = input_data.get('user', {})
