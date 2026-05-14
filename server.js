@@ -780,32 +780,6 @@ app.post('/api/login', async (req, res) => {
       return res.status(503).json({ success: false, message: '数据库未配置' });
     }
     
-    // ========== 管理员白名单（不验证密码） ==========
-app.post('/api/login', async (req, res) => {
-  try {
-    const { studentId, attendancePassword } = req.body;
-    
-    if (!studentId) {
-      return res.status(400).json({ success: false, message: '请输入学号' });
-    }
-    
-    if (!MONGODB_URI) {
-      return res.status(503).json({ success: false, message: '数据库未配置' });
-    }
-    
-    // ========== 管理员白名单（不验证密码） ==========
-app.post('/api/login', async (req, res) => {
-  try {
-    const { studentId, attendancePassword } = req.body;
-    
-    if (!studentId) {
-      return res.status(400).json({ success: false, message: '请输入学号' });
-    }
-    
-    if (!MONGODB_URI) {
-      return res.status(503).json({ success: false, message: '数据库未配置' });
-    }
-    
     // ========== 管理员白名单 ==========
     // ⚠️ 安全提醒：管理员建议用数据库 role='admin' 验证，而非硬编码白名单
     const ADMIN_WHITELIST = ['111', 'admin'];
