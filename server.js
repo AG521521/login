@@ -503,6 +503,64 @@ async function realSign(studentId, password, maxRetries = 3) {
   });
 }
 
+// ============ 只验证密码（获取Token，不跑完整签到）============
+async function verifyPassword(studentId, password) {
+  return new Promise((resolve) => {
+    const pythonScript = path.join(__dirname, 'attendance_runner.py');
+    const pythonProcess = spawn('python3', [pythonScript], {
+      timeout: 30000
+    });
+    
+    let output = '';
+    let errorOutput = '';
+    let isResolved = false;
+    
+    const timeout = setTimeout(() => {
+      if (!isResolved) {
+        isResolved = true;
+        pythonProcess.kill();
+        resolve({ success: false, message: '验证超时，请重试' });
+      }
+    }, 25000);
+    
+    pythonProcess.stdout.on('data', (data) => { output += data.toString(); });
+    pythonProcess.stderr.on('data', (data) => { 
+      errorOutput += data.toString();
+      console.error('验证密码 stderr:', data.toString());
+    });
+    
+    pythonProcess.on('close', (code) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(timeout);
+      
+      try {
+        const result = JSON.parse(output);
+        resolve({
+          success: result.success === true,
+          username: result.username || '',
+          message: result.message || ''
+        });
+      } catch (e) {
+        resolve({ success: false, message: '验证失败，请重试' });
+      }
+    });
+    
+    pythonProcess.on('error', (err) => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(timeout);
+      resolve({ success: false, message: '验证服务暂不可用' });
+    });
+    
+    pythonProcess.stdin.write(JSON.stringify({
+      action: 'verify',
+      user: { studentId, password }
+    }));
+    pythonProcess.stdin.end();
+  });
+}
+
 // ============ 自动签到执行函数 ============
 async function executeAutoSign() {
   console.log('⏰ 自动签到任务开始:', getBeijingTime());
@@ -723,19 +781,59 @@ app.post('/api/login', async (req, res) => {
     }
     
     // ========== 管理员白名单（不验证密码） ==========
-    const ADMIN_WHITELIST = ['111'];  // 管理员的学号
+app.post('/api/login', async (req, res) => {
+  try {
+    const { studentId, attendancePassword } = req.body;
     
-    if (!ADMIN_WHITELIST.includes(studentId)) {
-      // ========== 普通用户：验证学号和密码 ==========
-      const signPassword = attendancePassword || 'Ahgydx@920';
-      const verifyResult = await realSign(studentId, signPassword, 1);
+    if (!studentId) {
+      return res.status(400).json({ success: false, message: '请输入学号' });
+    }
+    
+    if (!MONGODB_URI) {
+      return res.status(503).json({ success: false, message: '数据库未配置' });
+    }
+    
+    // ========== 管理员白名单（不验证密码） ==========
+app.post('/api/login', async (req, res) => {
+  try {
+    const { studentId, attendancePassword } = req.body;
+    
+    if (!studentId) {
+      return res.status(400).json({ success: false, message: '请输入学号' });
+    }
+    
+    if (!MONGODB_URI) {
+      return res.status(503).json({ success: false, message: '数据库未配置' });
+    }
+    
+    // ========== 管理员白名单 ==========
+    // ⚠️ 安全提醒：管理员建议用数据库 role='admin' 验证，而非硬编码白名单
+    const ADMIN_WHITELIST = ['111', 'admin'];
+    
+    const isAdmin = ADMIN_WHITELIST.includes(studentId);
+    
+    if (!isAdmin) {
+      // ========== 普通用户验证 ==========
+      
+      // 密码必填
+      if (!attendancePassword) {
+        return res.status(400).json({ 
+          success: false, 
+          message: '请输入考勤密码' 
+        });
+      }
+      
+      // 只验证密码是否正确（不跑完整签到流程）
+      const verifyResult = await verifyPassword(studentId, attendancePassword);
+      
+      console.log('密码验证结果:', JSON.stringify(verifyResult));
       
       if (!verifyResult.success) {
-        // 密码错误或学号不存在
+        // 密码错误
         const existingUser = await User.findOne({ studentId });
         
         if (existingUser) {
-          // 老用户：允许登录，但提示密码可能不对
+          // 老用户：允许登录，但提示密码不对
           existingUser.lastLogin = new Date();
           await existingUser.save();
           
@@ -765,13 +863,13 @@ app.post('/api/login', async (req, res) => {
           // 新用户：坚决拒绝
           return res.status(401).json({ 
             success: false, 
-            message: '学号或密码错误，请检查后重试' 
+            message: verifyResult.message || '学号或密码错误，请检查后重试' 
           });
         }
       }
     }
     
-    // 验证通过（或管理员白名单），继续登录
+    // ========== 验证通过，继续登录 ==========
     let user = await User.findOne({ studentId });
     
     if (!user) {
@@ -835,7 +933,7 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
+    
 // 获取用户信息
 app.get('/api/user/profile', authMiddleware, async (req, res) => {
   const user = req.user;
