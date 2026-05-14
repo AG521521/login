@@ -272,57 +272,77 @@ async def main():
         input_data = json.loads(sys.stdin.read())
         action = input_data.get('action', 'sign_single')
 
-            if action == 'verify':
-        # 只验证密码：获取 Token 即可，不跑完整签到流程
-        user_data = input_data.get('user', {})
-        user = User(
-            student_Id=str(user_data.get('studentId')),
-            password=user_data.get('password', 'Ahgydx@920')
-        )
-        try:
-            async with user.session.post(
-                url=WEB_DICT["token_api"],
-                params=generate_params(user),
-                headers=generate_header(user)
-            ) as resp:
-                token_result = await resp.json()
-            
-            if 'refresh_token' in token_result:
-                print(json.dumps({
-                    'success': True,
-                    'username': token_result.get('userName', ''),
-                    'message': '密码正确'
-                }, ensure_ascii=False))
-            else:
-                error_desc = token_result.get('error_description', '未知错误')
-                if "Bad credentials" in error_desc:
-                    error_desc = "学号或密码错误"
-                print(json.dumps({
-                    'success': False,
-                    'message': error_desc
-                }, ensure_ascii=False))
-        except Exception as e:
-            print(json.dumps({
-                'success': False,
-                'message': str(e)
-            }, ensure_ascii=False))
-        finally:
-            await user.close()
-        
-        if action == 'sign_single':
+        # ================= 验证密码 =================
+        if action == 'verify':
+
             user_data = input_data.get('user', {})
+
             user = User(
                 student_Id=str(user_data.get('studentId')),
-                password=user_data.get('password', 'Ahgydx@920')
+                password=user_data.get('password', '')
             )
-            result = await sign_in_single(user, max_retries=input_data.get('maxRetries', 3))
+
+            try:
+                async with user.session.post(
+                    url=WEB_DICT["token_api"],
+                    params=generate_params(user),
+                    headers=generate_header(user)
+                ) as resp:
+                    token_result = await resp.json()
+
+                if 'refresh_token' in token_result:
+                    print(json.dumps({
+                        'success': True,
+                        'username': token_result.get('userName', ''),
+                        'message': '密码正确'
+                    }, ensure_ascii=False))
+                else:
+                    error_desc = token_result.get('error_description', '未知错误')
+
+                    if "Bad credentials" in error_desc:
+                        error_desc = "学号或密码错误"
+
+                    print(json.dumps({
+                        'success': False,
+                        'message': error_desc
+                    }, ensure_ascii=False))
+
+            finally:
+                await user.close()
+
+            return  # ← 关键：验证完就退出，不继续执行
+
+        # ================= 正式签到 =================
+        elif action == 'sign_single':
+
+            user_data = input_data.get('user', {})
+
+            user = User(
+                student_Id=str(user_data.get('studentId')),
+                password=user_data.get('password', '')
+            )
+
+            result = await sign_in_single(
+                user,
+                max_retries=input_data.get('maxRetries', 3)
+            )
+
             print(json.dumps(result, ensure_ascii=False))
-            
+
+            return
+
+        # ================= 未知操作 =================
         else:
-            print(json.dumps({'success': False, 'message': f'未知操作: {action}'}, ensure_ascii=False))
-            
+            print(json.dumps({
+                'success': False,
+                'message': f'未知操作: {action}'
+            }, ensure_ascii=False))
+
     except Exception as e:
-        print(json.dumps({'success': False, 'message': str(e)}, ensure_ascii=False))
+        print(json.dumps({
+            'success': False,
+            'message': str(e)
+        }, ensure_ascii=False))
 
 
 if __name__ == '__main__':
