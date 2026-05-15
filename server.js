@@ -254,6 +254,38 @@ async function initSystemConfig() {
 // ============ JWT 配置 ============
 const JWT_SECRET = process.env.JWT_SECRET || 'attendance-secret-key-2024-please-change';
 const JWT_EXPIRE = '30d';
+const ADMIN_CREDENTIALS = parseAdminCredentials(process.env.ADMIN_CREDENTIALS || '111:0101');
+
+function parseAdminCredentials(rawValue) {
+  return String(rawValue)
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+    .reduce((credentials, item) => {
+      const separatorIndex = item.indexOf(':');
+      if (separatorIndex <= 0) return credentials;
+
+      const account = item.slice(0, separatorIndex).trim();
+      const password = item.slice(separatorIndex + 1);
+      if (account && password) credentials.set(account, password);
+      return credentials;
+    }, new Map());
+}
+
+function timingSafeTextEqual(actual, expected) {
+  const actualHash = crypto.createHash('sha256').update(String(actual || '')).digest();
+  const expectedHash = crypto.createHash('sha256').update(String(expected || '')).digest();
+  return crypto.timingSafeEqual(actualHash, expectedHash);
+}
+
+function isConfiguredAdminAccount(studentId) {
+  return ADMIN_CREDENTIALS.has(String(studentId));
+}
+
+function validateAdminLogin(studentId, password) {
+  const expectedPassword = ADMIN_CREDENTIALS.get(String(studentId));
+  return Boolean(expectedPassword) && timingSafeTextEqual(password, expectedPassword);
+}
 
 // ============ 认证中间件 ============
 const authMiddleware = async (req, res, next) => {
@@ -780,13 +812,23 @@ app.post('/api/login', async (req, res) => {
       return res.status(503).json({ success: false, message: '数据库未配置' });
     }
     
-    // ========== 管理员白名单 ==========
-    // ⚠️ 安全提醒：管理员建议用数据库 role='admin' 验证，而非硬编码白名单
-    const ADMIN_WHITELIST = ['111', 'admin'];
-    
-    const isAdmin = ADMIN_WHITELIST.includes(studentId);
-    
-    if (!isAdmin) {
+    const isAdminAccount = isConfiguredAdminAccount(studentId);
+
+    if (isAdminAccount) {
+      if (!attendancePassword) {
+        return res.status(400).json({
+          success: false,
+          message: '请输入管理员密码'
+        });
+      }
+
+      if (!validateAdminLogin(studentId, attendancePassword)) {
+        return res.status(401).json({
+          success: false,
+          message: '管理员账号或密码错误'
+        });
+      }
+    } else {
       // ========== 普通用户验证 ==========
       
       // 密码必填
@@ -855,17 +897,26 @@ app.post('/api/login', async (req, res) => {
         if (!existing) isUnique = true;
       }
       
-      user = new User({ 
+      const userData = { 
         studentId,
         name: studentId,
-        attendancePassword: attendancePassword || 'Ahgydx@920',
         inviteCode,
         lastLogin: new Date()
-      });
+      };
+
+      if (isAdminAccount) {
+        userData.role = 'admin';
+      } else {
+        userData.attendancePassword = attendancePassword || 'Ahgydx@920';
+      }
+
+      user = new User(userData);
       await user.save();
     } else {
       user.lastLogin = new Date();
-      if (attendancePassword) {
+      if (isAdminAccount) {
+        user.role = 'admin';
+      } else if (attendancePassword) {
         user.attendancePassword = attendancePassword;
       }
       if (!user.inviteCode) {
