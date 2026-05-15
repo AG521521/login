@@ -811,7 +811,7 @@ app.post('/api/login', async (req, res) => {
     if (!MONGODB_URI) {
       return res.status(503).json({ success: false, message: '数据库未配置' });
     }
-    
+    let verifyResult = null;
     const isAdminAccount = isConfiguredAdminAccount(studentId);
 
     if (isAdminAccount) {
@@ -840,7 +840,7 @@ app.post('/api/login', async (req, res) => {
       }
       
       // 只验证密码是否正确（不跑完整签到流程）
-      const verifyResult = await verifyPassword(studentId, attendancePassword);
+       verifyResult = await verifyPassword(studentId, attendancePassword);
       
       console.log('密码验证结果:', JSON.stringify(verifyResult));
       
