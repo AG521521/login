@@ -897,9 +897,12 @@ app.post('/api/login', async (req, res) => {
         if (!existing) isUnique = true;
       }
       
+      // 获取 Python 验证返回的真实姓名（verifyResult 在普通用户验证时已赋值）
+      const realName = (verifyResult?.username) || studentId;
+      
       const userData = { 
         studentId,
-        name: studentId,
+        name: realName,  // ← 使用学校系统的真实姓名
         inviteCode,
         lastLogin: new Date()
       };
@@ -909,10 +912,13 @@ app.post('/api/login', async (req, res) => {
       } else {
         userData.attendancePassword = attendancePassword || 'Ahgydx@920';
       }
-
       user = new User(userData);
       await user.save();
     } else {
+      // 老用户：如果之前没存真实姓名，现在补上
+      if (verifyResult?.username && (!user.name || user.name === user.studentId)) {
+        user.name = verifyResult.username;
+      }
       user.lastLogin = new Date();
       if (isAdminAccount) {
         user.role = 'admin';
