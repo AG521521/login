@@ -60,11 +60,11 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(null, true);
+      console.log('❌ CORS 拒绝的域名:', origin);
+      callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
@@ -252,7 +252,11 @@ async function initSystemConfig() {
 }
 
 // ============ JWT 配置 ============
-const JWT_SECRET = process.env.JWT_SECRET || 'attendance-secret-key-2024-please-change';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('❌ JWT_SECRET 环境变量未设置！');
+  process.exit(1);
+}
 const JWT_EXPIRE = '30d';
 const ADMIN_CREDENTIALS = parseAdminCredentials(process.env.ADMIN_CREDENTIALS || '111:0101');
 
@@ -594,6 +598,7 @@ async function verifyPassword(studentId, password) {
 }
 
 // ============ 自动签到执行函数 ============
+// ============ 自动签到执行函数（并发优化版）============
 async function executeAutoSign() {
   console.log('⏰ 自动签到任务开始:', getBeijingTime());
   
@@ -608,6 +613,7 @@ async function executeAutoSign() {
     
     const subscriptions = await Subscription.find({ enabled: true }).populate('userId');
     
+    // 筛选今天需要签到的订阅
     const todaySubscriptions = subscriptions.filter(sub => {
       if (sub.scheduleType === 'daily') return true;
       if (sub.scheduleType === 'weekdays') return dayOfWeek >= 1 && dayOfWeek <= 5;
@@ -617,6 +623,7 @@ async function executeAutoSign() {
       return false;
     });
     
+    // 按用户分组
     const userMap = new Map();
     for (const sub of todaySubscriptions) {
       const user = sub.userId;
@@ -628,68 +635,84 @@ async function executeAutoSign() {
       }
     }
     
-    console.log(`📊 今天需要签到: ${userMap.size} 个用户`);
+    const userArray = Array.from(userMap.entries());
+    console.log(`📊 今天需要签到: ${userArray.length} 个用户`);
     
-    for (const [userId, data] of userMap) {
-      const { user, subscriptions } = data;
+    // 并发处理：每批 5 个用户同时签到
+    const CONCURRENCY = 5;
+    
+    for (let i = 0; i < userArray.length; i += CONCURRENCY) {
+      const batch = userArray.slice(i, i + CONCURRENCY);
       
-      try {
-        console.log(`🔄 签到: ${user.studentId}`);
+      console.log(`🔄 处理第 ${Math.floor(i / CONCURRENCY) + 1} 批，共 ${batch.length} 人`);
+      
+      await Promise.all(batch.map(async ([userId, data]) => {
+        const { user, subscriptions } = data;
         
-        const signPassword = user.attendancePassword || 'Ahgydx@920';
-        const signTime = new Date();
-        const signResult = await realSign(user.studentId, signPassword, 3);
-        
-        user.totalSignCount = (user.totalSignCount || 0) + 1;
-        if (signResult.success) {
-          user.successSignCount = (user.successSignCount || 0) + 1;
-        }
-        await user.save();
-        
-        for (const sub of subscriptions) {
-          const log = new SignLog({
-            userId: user._id,
-            subscriptionId: sub._id,
-            subscriptionName: sub.name,
-            status: signResult.success ? 'success' : 'failed',
-            message: signResult.message || '',
-            signTime: signTime
-          });
-          await log.save();
-        }
-        
-        if (user.isVip && user.emailVerified && user.email) {
-          const now = new Date();
-          const vipValid = user.vipExpireAt && user.vipExpireAt > now;
+        try {
+          console.log(`🔄 签到: ${user.studentId}`);
           
-          if (vipValid) {
-            const shouldNotify = signResult.success ? 
-              subscriptions.some(s => s.notifyOnSuccess) : 
-              subscriptions.some(s => s.notifyOnFailure);
-            
-            if (shouldNotify) {
-              const subscriptionNames = subscriptions.map(s => s.name).join(', ');
-              await sendSignNotification(
-                user.email, 
-                user.studentId, 
-                signResult, 
-                subscriptionNames,
-                signTime
-              );
-            }
-          } else {
-            user.isVip = false;
-            await user.save();
+          const signPassword = user.attendancePassword || 'Ahgydx@920';
+          const signTime = new Date();
+          const signResult = await realSign(user.studentId, signPassword, 3);
+          
+          // 更新用户统计
+          user.totalSignCount = (user.totalSignCount || 0) + 1;
+          if (signResult.success) {
+            user.successSignCount = (user.successSignCount || 0) + 1;
           }
+          await user.save();
+          
+          // 记录签到日志
+          for (const sub of subscriptions) {
+            const log = new SignLog({
+              userId: user._id,
+              subscriptionId: sub._id,
+              subscriptionName: sub.name,
+              status: signResult.success ? 'success' : 'failed',
+              message: signResult.message || '',
+              signTime: signTime
+            });
+            await log.save();
+          }
+          
+          // VIP 邮件通知
+          if (user.isVip && user.emailVerified && user.email) {
+            const now = new Date();
+            const vipValid = user.vipExpireAt && user.vipExpireAt > now;
+            
+            if (vipValid) {
+              const shouldNotify = signResult.success ? 
+                subscriptions.some(s => s.notifyOnSuccess) : 
+                subscriptions.some(s => s.notifyOnFailure);
+              
+              if (shouldNotify) {
+                const subscriptionNames = subscriptions.map(s => s.name).join(', ');
+                await sendSignNotification(
+                  user.email, 
+                  user.studentId, 
+                  signResult, 
+                  subscriptionNames,
+                  signTime
+                );
+              }
+            } else {
+              user.isVip = false;
+              await user.save();
+            }
+          }
+          
+          console.log(`✅ ${user.studentId}: ${signResult.success ? '成功' : '失败'}`);
+          
+        } catch (error) {
+          console.error(`❌ ${data.user.studentId}:`, error.message);
         }
-        
-        console.log(`✅ ${user.studentId}: ${signResult.success ? '成功' : '失败'}`);
-        
-      } catch (error) {
-        console.error(`❌ ${user.studentId}:`, error.message);
-      }
+      }));
       
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // 每批之间间隔 3 秒，避免服务器压力过大
+      if (i + CONCURRENCY < userArray.length) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
     }
     
     console.log('✅ 自动签到任务完成');
@@ -739,20 +762,7 @@ app.get('/api/plant/data/history', async (req, res) => {
     }
 });
 
-// 4. 前端提交控制指令
-app.post('/api/plant/control', async (req, res) => {
-    try {
-        const cmd = await ControlCmd.create({
-            ...req.body,
-            status: 'pending',
-            createdAt: new Date()
-        });
-        console.log('🔧 收到控制指令:', JSON.stringify(req.body));
-        res.json({ success: true, id: cmd._id });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
+
 
 // 5. ESP8266 轮询拉取待执行的控制指令
 app.get('/api/plant/control/pending', async (req, res) => {
@@ -845,43 +855,10 @@ app.post('/api/login', async (req, res) => {
       console.log('密码验证结果:', JSON.stringify(verifyResult));
       
       if (!verifyResult.success) {
-        // 密码错误
-        const existingUser = await User.findOne({ studentId });
-        
-        if (existingUser) {
-          // 老用户：允许登录，但提示密码不对
-          existingUser.lastLogin = new Date();
-          await existingUser.save();
-          
-          const token = jwt.sign({ userId: existingUser._id }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
-          
-          return res.json({
-            success: true,
-            token,
-            warning: '考勤密码可能已过期，请在个人中心更新密码',
-            user: {
-              id: existingUser._id,
-              studentId: existingUser.studentId,
-              name: existingUser.name,
-              email: existingUser.email,
-              emailVerified: existingUser.emailVerified,
-              isVip: existingUser.isVip,
-              vipExpireAt: existingUser.vipExpireAt,
-              role: existingUser.role,
-              inviteCode: existingUser.inviteCode,
-              invitedBy: existingUser.invitedBy,
-              inviteCount: existingUser.inviteCount,
-              totalSignCount: existingUser.totalSignCount,
-              successSignCount: existingUser.successSignCount
-            }
-          });
-        } else {
-          // 新用户：坚决拒绝
-          return res.status(401).json({ 
-            success: false, 
-            message: verifyResult.message || '学号或密码错误，请检查后重试' 
-          });
-        }
+        return res.status(401).json({ 
+          success: false, 
+          message: verifyResult.message || '学号或密码错误' 
+        });
       }
     }
     
@@ -1616,7 +1593,7 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
     } : {};
     
     const users = await User.find(query)
-      .select('-__v')
+      .select('-__v -attendancePassword')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(parseInt(limit));
@@ -1633,6 +1610,10 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
 app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
+        // 从返回对象中删除敏感字段
+    if (user) {
+      user.attendancePassword = undefined;
+    }
     if (!user) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
