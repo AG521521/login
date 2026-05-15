@@ -1382,6 +1382,8 @@ app.post('/api/subscriptions/:id/toggle', authMiddleware, async (req, res) => {
 // ============ 手动签到 ============
 app.post('/api/sign/manual', authMiddleware, async (req, res) => {
   try {
+    const { attendancePassword } = req.body;
+    const user = req.user;
     // 检查今天是否已签到成功
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -1400,8 +1402,7 @@ app.post('/api/sign/manual', authMiddleware, async (req, res) => {
         result: { success: true, message: '今天已签到，无需重复操作' }
       });
     }
-    const { attendancePassword } = req.body;
-    const user = req.user;
+
     
     const signPassword = attendancePassword || user.attendancePassword || 'Ahgydx@920';
     const signTime = new Date();
