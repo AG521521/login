@@ -646,10 +646,28 @@ async function executeAutoSign() {
       
       console.log(`🔄 处理第 ${Math.floor(i / CONCURRENCY) + 1} 批，共 ${batch.length} 人`);
       
-      await Promise.all(batch.map(async ([userId, data]) => {
+        await Promise.allSettled(
+      batch.map(async ([userId, data]) => {
         const { user, subscriptions } = data;
         
         try {
+          // ========== 防止重复签到 ==========
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const todayEnd = new Date();
+          todayEnd.setHours(23, 59, 59, 999);
+    
+          const existingLog = await SignLog.findOne({
+            userId: user._id,
+            status: 'success',
+            signTime: { $gte: todayStart, $lte: todayEnd }
+          });
+    
+          if (existingLog) {
+            console.log(`⏭️ ${user.studentId} 今天已签到，跳过`);
+            return;
+          }
+    
           console.log(`🔄 签到: ${user.studentId}`);
           
           const signPassword = user.attendancePassword || 'Ahgydx@920';
@@ -707,7 +725,8 @@ async function executeAutoSign() {
         } catch (error) {
           console.error(`❌ ${data.user.studentId}:`, error.message);
         }
-      }));
+      })
+    );
       
       // 每批之间间隔 3 秒，避免服务器压力过大
       if (i + CONCURRENCY < userArray.length) {
@@ -1363,6 +1382,24 @@ app.post('/api/subscriptions/:id/toggle', authMiddleware, async (req, res) => {
 // ============ 手动签到 ============
 app.post('/api/sign/manual', authMiddleware, async (req, res) => {
   try {
+    // 检查今天是否已签到成功
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    
+    const existingLog = await SignLog.findOne({
+      userId: user._id,
+      status: 'success',
+      signTime: { $gte: todayStart, $lte: todayEnd }
+    });
+    
+    if (existingLog) {
+      return res.json({
+        success: true,
+        result: { success: true, message: '今天已签到，无需重复操作' }
+      });
+    }
     const { attendancePassword } = req.body;
     const user = req.user;
     
