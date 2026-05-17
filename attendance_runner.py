@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from urllib.parse import urlparse
 import aiohttp
+from aiohttp.resolver import AsyncResolver
 
 import socket
 try:
@@ -55,20 +56,33 @@ class User:
     room_id: str = ""
     _session = None
     
-    @property
-    def session(self):
-        if self._session is None:
-            self._session = aiohttp.ClientSession(headers={
+@property
+def session(self):
+    if self._session is None:
+        # 创建自定义 DNS 解析器（绕过 Railway 默认 DNS）
+        resolver = AsyncResolver(
+            nameservers=[
+                "8.8.8.8",      # Google DNS
+                "1.1.1.1",      # Cloudflare DNS
+                "114.114.114.114"  # 国内备用
+            ]
+        )
+        connector = aiohttp.TCPConnector(resolver=resolver)
+        
+        self._session = aiohttp.ClientSession(
+            connector=connector,
+            headers={
                 'User-Agent': random.choice(UA_LIST),
-                'authorization': "Basic Zmx5c291cmNlX3dpc2VfYXBwOkRBNzg4YXNkVURqbmFzZF9mbHlzb3VyY2VfZHNkYWREQUlVaXV3cWU=",
+                'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
                 'Content-Type': "application/json;charset=UTF-8",
                 'X-Requested-With': "com.tencent.mm",
                 'Origin': "https://xskq.ahut.edu.cn",
-            })
-        else:
-            if self.token:
-                self._session.headers["flysource-auth"] = f"bearer {self.token}"
-        return self._session
+            }
+        )
+    else:
+        if self.token:
+            self._session.headers["flysource-auth"] = f"bearer {self.token}"
+    return self._session
     
     async def close(self):
         if self._session:
