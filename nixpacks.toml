@@ -17,4 +17,4 @@ nixPkgs = ["python311", "python311Packages.pip"]
 cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
 
 [start]
-cmd = "python your_script_name.py"   # 改成你的实际入口脚本
+cmd = "attendance_runner.py"   # 改成你的实际入口脚本
