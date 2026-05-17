@@ -4,17 +4,8 @@ nixPkgs = ["nodejs_18", "python311", "python311Packages.pip"]
 [phases.install]
 cmds = [
   "npm install",
-  "pip3 install aiohttp --break-system-packages"
+  "pip3 install aiohttp aiodns pycares --break-system-packages"
 ]
 
 [start]
 cmd = "node server.js"
-
-[phases.setup]
-nixPkgs = ["python311", "python311Packages.pip"]
-
-[phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
-
-[start]
-cmd = "attendance_runner.py"   # 改成你的实际入口脚本
