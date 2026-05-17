@@ -63,10 +63,11 @@ class User:
     )
 
     @property
-    def session(self):
+   def session(self):
 
-        if self._session is None:
+    if self._session is None:
 
+        try:
             resolver = AsyncResolver(
                 nameservers=[
                     "8.8.8.8",
@@ -79,24 +80,31 @@ class User:
                 resolver=resolver
             )
 
-            self._session = aiohttp.ClientSession(
-                connector=connector,
-                headers={
-                    'User-Agent': random.choice(UA_LIST),
-                    'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
-                    'Content-Type': "application/json;charset=UTF-8",
-                    'X-Requested-With': "com.tencent.mm",
-                    'Origin': "https://xskq.ahut.edu.cn",
-                }
-            )
+            print("使用自定义DNS")
 
-        if self.token:
-            self._session.headers[
-                "flysource-auth"
-            ] = f"bearer {self.token}"
+        except Exception as e:
 
-        return self._session
+            print(f"DNS初始化失败: {e}")
 
+            connector = aiohttp.TCPConnector()
+
+            print("回退默认DNS")
+
+        self._session = aiohttp.ClientSession(
+            connector=connector,
+            headers={
+                'User-Agent': random.choice(UA_LIST),
+                'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
+                'Content-Type': "application/json;charset=UTF-8",
+                'X-Requested-With': "com.tencent.mm",
+                'Origin': "https://xskq.ahut.edu.cn",
+            }
+        )
+
+    if self.token:
+        self._session.headers["flysource-auth"] = f"bearer {self.token}"
+
+    return self._session
     async def close(self):
 
         if self._session:
