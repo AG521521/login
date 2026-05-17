@@ -112,10 +112,7 @@ class User:
 
         if self._session:
             await self._session.close()
-    async def close(self):
 
-        if self._session:
-            await self._session.close()
 
 def password_md5(pwd: str) -> str:
     return hashlib.md5(pwd.encode('utf-8')).hexdigest()
