@@ -17,14 +17,6 @@ from urllib.parse import urlparse
 import aiohttp
 from aiohttp.resolver import AsyncResolver
 
-import socket
-try:
-    print("=== DNS 解析详情 ===")
-    hostname = "xskq.ahut.edu.cn"
-    print("getaddrinfo:", socket.getaddrinfo(hostname, 443))
-    print("gethostbyname_ex:", socket.gethostbyname_ex(hostname))
-except Exception as e:
-    print(f"DNS 解析异常: {e}")
 # ========== 配置常量 ==========
 API_BASE_URL = "https://xskq.ahut.edu.cn/api"
 WEB_DICT = {
@@ -43,9 +35,18 @@ UA_LIST = [
 
 SIGN_IN_LOCK = asyncio.Lock()
 
+# ========== DNS 诊断（输出到 stderr）==========
+try:
+    import socket
+    print("=== DNS 诊断（自定义解析器前）===", file=sys.stderr)
+    hostname = "xskq.ahut.edu.cn"
+    print("getaddrinfo:", socket.getaddrinfo(hostname, 443), file=sys.stderr)
+    print("gethostbyname_ex:", socket.gethostbyname_ex(hostname), file=sys.stderr)
+except Exception as e:
+    print(f"系统 DNS 解析异常: {e}", file=sys.stderr)
 
-from dataclasses import dataclass, field
 
+# ========== User 类 ==========
 @dataclass
 class User:
     student_Id: str
@@ -57,41 +58,31 @@ class User:
     taskId: str = None
     room_id: str = ""
 
-    _session: aiohttp.ClientSession = field(
-        default=None,
-        init=False
-    )
+    _session: aiohttp.ClientSession = field(default=None, init=False)
 
     @property
     def session(self):
-
         if self._session is None:
-
+            # 创建自定义 DNS 解析器（使用国内公共 DNS）
             try:
                 resolver = AsyncResolver(
                     nameservers=[
-                        "8.8.8.8",
-                        "1.1.1.1",
-                        "114.114.114.114"
+                        "223.5.5.5",   # 阿里 DNS
+                        "223.6.6.6",
+                        "119.29.29.29" # 腾讯 DNS
                     ]
                 )
-
-                connector = aiohttp.TCPConnector(
-                    resolver=resolver
-                )
-
-                print("使用自定义DNS")
-
+                connector = aiohttp.TCPConnector(resolver=resolver)
+                print("使用自定义 DNS (223.5.5.5, 223.6.6.6, 119.29.29.29)", file=sys.stderr)
             except Exception as e:
-
-                print(f"DNS初始化失败:{e}")
-
+                print(f"自定义 DNS 初始化失败: {e}，回退系统默认 DNS", file=sys.stderr)
                 connector = aiohttp.TCPConnector()
 
-                print("回退默认DNS")
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
 
             self._session = aiohttp.ClientSession(
                 connector=connector,
+                timeout=timeout,
                 headers={
                     'User-Agent': random.choice(UA_LIST),
                     'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
@@ -102,18 +93,16 @@ class User:
             )
 
         if self.token:
-            self._session.headers[
-                "flysource-auth"
-            ] = f"bearer {self.token}"
+            self._session.headers["flysource-auth"] = f"bearer {self.token}"
 
         return self._session
 
     async def close(self):
-
         if self._session:
             await self._session.close()
 
 
+# ========== 辅助函数 ==========
 def password_md5(pwd: str) -> str:
     return hashlib.md5(pwd.encode('utf-8')).hexdigest()
 
@@ -195,8 +184,11 @@ def generate_data(user: User) -> dict:
     }
 
 
+# ========== 签到步骤 ==========
 async def sign_in_by_step(user: User, step: int) -> dict:
     """执行单步签到"""
+    print(f"[DEBUG] 执行步骤 {step}", file=sys.stderr)
+
     if step == 0:
         async with user.session.post(
             url=WEB_DICT["token_api"],
@@ -293,16 +285,21 @@ async def sign_in_single(user: User, max_retries: int = 3) -> dict:
     step, retries, token_retries = 0, 0, 0
     error_history = []
     
-    while retries < max_retries and 0 <= step < 6:
-        result = await sign_in_by_step(user, step)
-        step = result['step']
-        if not result['success']:
-            error_history.append(result['msg'])
-            if step == 0 and token_retries < 3:
-                token_retries += 1
-            else:
-                retries += 1
-        await asyncio.sleep(random.uniform(0.5, 2))
+    try:
+        while retries < max_retries and 0 <= step < 6:
+            result = await sign_in_by_step(user, step)
+            step = result['step']
+            if not result['success']:
+                error_history.append(result['msg'])
+                if step == 0 and token_retries < 3:
+                    token_retries += 1
+                else:
+                    retries += 1
+            await asyncio.sleep(random.uniform(0.5, 2))
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {'success': False, 'errors': [str(e)], 'message': f'签到异常: {str(e)}'}
     
     await user.close()
     
@@ -318,16 +315,13 @@ async def main():
         input_data = json.loads(sys.stdin.read())
         action = input_data.get('action', 'sign_single')
 
-        # ================= 验证密码 =================
+        # 验证密码
         if action == 'verify':
-
             user_data = input_data.get('user', {})
-
             user = User(
                 student_Id=str(user_data.get('studentId')),
                 password=user_data.get('password', '')
             )
-
             try:
                 async with user.session.post(
                     url=WEB_DICT["token_api"],
@@ -344,40 +338,31 @@ async def main():
                     }, ensure_ascii=False))
                 else:
                     error_desc = token_result.get('error_description', '未知错误')
-
                     if "Bad credentials" in error_desc:
                         error_desc = "学号或密码错误"
-
                     print(json.dumps({
                         'success': False,
                         'message': error_desc
                     }, ensure_ascii=False))
-
             finally:
                 await user.close()
+            return
 
-            return  # ← 关键：验证完就退出，不继续执行
-
-        # ================= 正式签到 =================
+        # 正式签到
         elif action == 'sign_single':
-
             user_data = input_data.get('user', {})
-
             user = User(
                 student_Id=str(user_data.get('studentId')),
                 password=user_data.get('password', '')
             )
-
             result = await sign_in_single(
                 user,
                 max_retries=input_data.get('maxRetries', 3)
             )
-
             print(json.dumps(result, ensure_ascii=False))
-
             return
 
-        # ================= 未知操作 =================
+        # 未知操作
         else:
             print(json.dumps({
                 'success': False,
