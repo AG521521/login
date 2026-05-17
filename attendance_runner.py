@@ -63,48 +63,55 @@ class User:
     )
 
     @property
-   def session(self):
+    def session(self):
 
-    if self._session is None:
+        if self._session is None:
 
-        try:
-            resolver = AsyncResolver(
-                nameservers=[
-                    "8.8.8.8",
-                    "1.1.1.1",
-                    "114.114.114.114"
-                ]
+            try:
+                resolver = AsyncResolver(
+                    nameservers=[
+                        "8.8.8.8",
+                        "1.1.1.1",
+                        "114.114.114.114"
+                    ]
+                )
+
+                connector = aiohttp.TCPConnector(
+                    resolver=resolver
+                )
+
+                print("使用自定义DNS")
+
+            except Exception as e:
+
+                print(f"DNS初始化失败:{e}")
+
+                connector = aiohttp.TCPConnector()
+
+                print("回退默认DNS")
+
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                headers={
+                    'User-Agent': random.choice(UA_LIST),
+                    'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
+                    'Content-Type': "application/json;charset=UTF-8",
+                    'X-Requested-With': "com.tencent.mm",
+                    'Origin': "https://xskq.ahut.edu.cn",
+                }
             )
 
-            connector = aiohttp.TCPConnector(
-                resolver=resolver
-            )
+        if self.token:
+            self._session.headers[
+                "flysource-auth"
+            ] = f"bearer {self.token}"
 
-            print("使用自定义DNS")
+        return self._session
 
-        except Exception as e:
+    async def close(self):
 
-            print(f"DNS初始化失败: {e}")
-
-            connector = aiohttp.TCPConnector()
-
-            print("回退默认DNS")
-
-        self._session = aiohttp.ClientSession(
-            connector=connector,
-            headers={
-                'User-Agent': random.choice(UA_LIST),
-                'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
-                'Content-Type': "application/json;charset=UTF-8",
-                'X-Requested-With': "com.tencent.mm",
-                'Origin': "https://xskq.ahut.edu.cn",
-            }
-        )
-
-    if self.token:
-        self._session.headers["flysource-auth"] = f"bearer {self.token}"
-
-    return self._session
+        if self._session:
+            await self._session.close()
     async def close(self):
 
         if self._session:
