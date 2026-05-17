@@ -16,7 +16,14 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 import aiohttp
 
-
+import socket
+try:
+    print("=== DNS 解析详情 ===")
+    hostname = "xskq.ahut.edu.cn"
+    print("getaddrinfo:", socket.getaddrinfo(hostname, 443))
+    print("gethostbyname_ex:", socket.gethostbyname_ex(hostname))
+except Exception as e:
+    print(f"DNS 解析异常: {e}")
 # ========== 配置常量 ==========
 API_BASE_URL = "https://xskq.ahut.edu.cn/api"
 WEB_DICT = {
