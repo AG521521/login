@@ -190,21 +190,38 @@ async def sign_in_by_step(user: User, step: int) -> dict:
     print(f"[DEBUG] 执行步骤 {step}", file=sys.stderr)
 
     if step == 0:
-        async with user.session.post(
-            url=WEB_DICT["token_api"],
-            params=generate_params(user),
-            headers=generate_header(user)
-        ) as resp:
-            token_result = await resp.json()
-        if 'refresh_token' in token_result:
-            user.token = token_result['refresh_token']
-            user.username = token_result.get('userName', '')
-            return {'success': True, 'msg': '', 'step': step + 1}
-        else:
-            error_desc = token_result.get('error_description', '未知错误')
-            if "Bad credentials" in error_desc:
-                error_desc = "密码错误"
-            return {'success': False, 'msg': error_desc, 'step': -1}
+    async with user.session.post(
+        url=WEB_DICT["token_api"],
+        params=generate_params(user),
+        headers=generate_header(user)
+    ) as resp:
+        # 打印响应状态码和 Content-Type
+        print(f"[DEBUG] Token 响应状态: {resp.status}", file=sys.stderr)
+        print(f"[DEBUG] Content-Type: {resp.headers.get('Content-Type', 'unknown')}", file=sys.stderr)
+        
+        # 尝试获取响应文本（用于诊断）
+        text = await resp.text()
+        print(f"[DEBUG] 响应体前500字符: {text[:500]}", file=sys.stderr)
+        
+        # 尝试解析 JSON
+        try:
+            token_result = json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] JSON 解析失败: {e}", file=sys.stderr)
+            return {'success': False, 'msg': f'接口返回非JSON: {text[:100]}', 'step': -1}
+    
+    if 'refresh_token' in token_result:
+        user.token = token_result['refresh_token']
+        user.username = token_result.get('userName', '')
+        return {'success': True, 'msg': '', 'step': step + 1}
+    else:
+        error_desc = token_result.get('error_description', '')
+        if not error_desc:
+            error_desc = token_result.get('msg', '未知错误')
+        if "Bad credentials" in error_desc:
+            error_desc = "密码错误"
+        print(f"[DEBUG] Token 获取失败: {token_result}", file=sys.stderr)
+        return {'success': False, 'msg': error_desc, 'step': -1}
     
     elif step == 1:
         async with user.session.get(
