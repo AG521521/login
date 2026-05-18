@@ -190,12 +190,17 @@ async def sign_in_by_step(user: User, step: int) -> dict:
     print(f"[DEBUG] 执行步骤 {step}", file=sys.stderr)
 
     if step == 0:
-        form_data = generate_params(user)
-        print(f"[DEBUG] 请求 token 接口，参数: {form_data}", file=sys.stderr)
+        params_data = generate_params(user)
+        extra_headers = {
+            'Referer': f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?&userId={user.student_Id}"
+        }
+        headers = generate_header(user)
+        headers.update(extra_headers)
+        
         async with user.session.post(
             url=WEB_DICT["token_api"],
-            data=form_data,   # 关键修改
-            headers=generate_header(user)
+            params=params_data,      # 改为 params
+            headers=headers
         ) as resp:
             print(f"[DEBUG] Token 响应状态: {resp.status}", file=sys.stderr)
             text = await resp.text()
