@@ -85,7 +85,7 @@ class User:
                 timeout=timeout,
                 headers={
                     'User-Agent': random.choice(UA_LIST),
-                    'authorization': "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
+                    'authorization':"Basic Zmx5c291cmNlX3dpc2VfYXBwOkRBNzg4YXNkVURqbmFzZF9mbHlzb3VyY2VfZHNkYWREQUlVaXV3cWU=",
                     'Content-Type': "application/json;charset=UTF-8",
                     'X-Requested-With': "com.tencent.mm",
                     'Origin': "https://xskq.ahut.edu.cn",
@@ -203,7 +203,7 @@ async def sign_in_by_step(user: User, step: int) -> dict:
     
         async with user.session.post(
             url=WEB_DICT["token_api"],
-            data=params_data,
+            params=params_data,
             headers=headers
         ) as resp:
     
@@ -214,8 +214,8 @@ async def sign_in_by_step(user: User, step: int) -> dict:
     
             token_result=json.loads(text)
     
-        if "access_token" in token_result:
-            user.token=token_result["access_token"]
+        if 'refresh_token' in token_result:
+            user.token = token_result['refresh_token']
             user.username=token_result.get("userName","")
     
             return {
