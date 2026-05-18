@@ -35,6 +35,9 @@ UA_LIST = [
 
 SIGN_IN_LOCK = asyncio.Lock()
 
+# 正确的 authorization 值（从参考脚本复制）
+AUTH_HEADER = "Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU="
+
 # ========== DNS 诊断（输出到 stderr）==========
 try:
     import socket
@@ -85,7 +88,7 @@ class User:
                 timeout=timeout,
                 headers={
                     'User-Agent': random.choice(UA_LIST),
-                    'authorization':"Basic Zmx5c291cmNlX3dpc2VfYXBwOkRBNzg4YXNkVURqbmFzZF9mbHlzb3VyY2VfZHNkYWREQUlVaXV3cWU=",
+                    'authorization': AUTH_HEADER,
                     'Content-Type': "application/json;charset=UTF-8",
                     'X-Requested-With': "com.tencent.mm",
                     'Origin': "https://xskq.ahut.edu.cn",
@@ -191,48 +194,38 @@ async def sign_in_by_step(user: User, step: int) -> dict:
 
     if step == 0:
         params_data = generate_params(user)
-    
+        # 专门为 token 请求构造正确的 headers
         headers = {
             "User-Agent": random.choice(UA_LIST),
-            "authorization":"Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
-            "Content-Type":"application/x-www-form-urlencoded",
-            "X-Requested-With":"com.tencent.mm",
-            "Origin":"https://xskq.ahut.edu.cn",
-            "Referer":f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
+            "authorization": AUTH_HEADER,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "com.tencent.mm",
+            "Origin": "https://xskq.ahut.edu.cn",
+            "Referer": f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
         }
-    
+
         async with user.session.post(
             url=WEB_DICT["token_api"],
             params=params_data,
             headers=headers
         ) as resp:
-    
-            print("状态:",resp.status,file=sys.stderr)
-    
-            text=await resp.text()
-            print(text,file=sys.stderr)
-    
-            token_result=json.loads(text)
-    
+            print(f"状态: {resp.status}", file=sys.stderr)
+            text = await resp.text()
+            print(f"响应体: {text[:500]}", file=sys.stderr)
+            try:
+                token_result = json.loads(text)
+            except json.JSONDecodeError as e:
+                print(f"JSON 解析失败: {e}", file=sys.stderr)
+                return {'success': False, 'msg': '接口返回非JSON', 'step': -1}
+
         if 'refresh_token' in token_result:
             user.token = token_result['refresh_token']
-            user.username=token_result.get("userName","")
-    
-            return {
-                "success":True,
-                "msg":"",
-                "step":1
-            }
-    
-        return {
-            "success":False,
-            "msg":token_result.get(
-                "error_description",
-                token_result.get("msg","登录失败")
-            ),
-            "step":-1
-        }
-    
+            user.username = token_result.get("userName", "")
+            return {"success": True, "msg": "", "step": 1}
+
+        error_msg = token_result.get("error_description") or token_result.get("msg", "登录失败")
+        return {"success": False, "msg": error_msg, "step": -1}
+
     elif step == 1:
         async with user.session.get(
             url=WEB_DICT['task_id_api'],
@@ -350,10 +343,21 @@ async def main():
                 password=user_data.get('password', '')
             )
             try:
+                # 验证时也需要正确的 authorization，但 user.session 已经包含正确的头
+                # 注意：验证接口也需要 params，并且 Content-Type 需要是 form
+                params_data = generate_params(user)
+                token_headers = {
+                    "User-Agent": random.choice(UA_LIST),
+                    "authorization": AUTH_HEADER,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Requested-With": "com.tencent.mm",
+                    "Origin": "https://xskq.ahut.edu.cn",
+                    "Referer": f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
+                }
                 async with user.session.post(
                     url=WEB_DICT["token_api"],
-                    params=generate_params(user),
-                    headers=generate_header(user)
+                    params=params_data,
+                    headers=token_headers
                 ) as resp:
                     token_result = await resp.json()
 
