@@ -417,10 +417,9 @@ async def main():
     # 将 DNS 诊断移到 main 内部，避免模块加载时报错
     try:
         import socket
-        print("=== DNS 诊断（自定义解析器前）===", file=sys.stderr)
-        print(socket.gethostbyname_ex("xskq.ahut.edu.cn"), file=sys.stderr)
-    except Exception as e:
-        print(f"DNS 诊断失败: {e}", file=sys.stderr)
+        socket.gethostbyname_ex("xskq.ahut.edu.cn")
+    except Exception:
+        pass   # 什么都不打印
 
     try:
         input_data = json.loads(sys.stdin.read())
