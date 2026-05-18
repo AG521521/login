@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-考勤脚本执行器
-供 Node.js 后端调用
+考勤脚本执行器 - 供 Node.js 后端调用
 """
 
 import sys
@@ -49,17 +48,7 @@ UA_LIST = [
 SIGN_IN_LOCK = asyncio.Lock()
 
 
-# ================= DNS诊断 =================
-
-try:
-    import socket
-    print("=== DNS诊断 ===", file=sys.stderr)
-    print(socket.gethostbyname_ex("xskq.ahut.edu.cn"), file=sys.stderr)
-except Exception as e:
-    print(f"DNS检测异常:{e}", file=sys.stderr)
-
-
-# ================= User =================
+# ================= User 类 =================
 
 @dataclass
 class User:
@@ -88,12 +77,14 @@ class User:
                     ]
                 )
                 connector = aiohttp.TCPConnector(resolver=resolver)
-                print("使用自定义DNS", file=sys.stderr)
-            except Exception:
+                print("使用自定义 DNS (223.5.5.5, 223.6.6.6, 119.29.29.29)", file=sys.stderr)
+            except Exception as e:
+                print(f"自定义 DNS 初始化失败: {e}，回退系统默认 DNS", file=sys.stderr)
                 connector = aiohttp.TCPConnector()
 
             timeout = aiohttp.ClientTimeout(total=30, connect=10)
 
+            # 注意：这里不再动态添加 flysource-auth，避免污染全局 Session
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=timeout,
@@ -106,9 +97,6 @@ class User:
                 }
             )
 
-        if self.token:
-            self._session.headers["flysource-auth"] = f"bearer {self.token}"
-
         return self._session
 
     async def close(self):
@@ -118,20 +106,12 @@ class User:
 
 # ================= 工具函数 =================
 
-def password_md5(pwd):
+def password_md5(pwd: str) -> str:
     return hashlib.md5(pwd.encode()).hexdigest()
 
 
-def generate_header(user, url=None):
-    headers = {}
-    if user.token:
-        headers["flysource-auth"] = f"bearer {user.token}"
-        if url:
-            headers["flysource-sign"] = generate_sign(url, user.token)
-    return headers
-
-
-def generate_params(user):
+def generate_params(user: User) -> dict:
+    """生成登录表单数据（用于 data=）"""
     return {
         "tenantId": "000000",
         "username": user.student_Id,
@@ -142,7 +122,7 @@ def generate_params(user):
     }
 
 
-def generate_sign(url, token):
+def generate_sign(url: str, token: str) -> str:
     if not token:
         return ''
     parsed_url = urlparse(url)
@@ -154,6 +134,16 @@ def generate_sign(url, token):
     final_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()
     encoded_time = base64.b64encode(str(timestamp).encode("utf-8")).decode("utf-8")
     return f"{final_hash}1.{encoded_time}"
+
+
+def generate_header(user: User, url: str = None) -> dict:
+    """每次请求动态生成 headers，不污染 Session"""
+    headers = {}
+    if user.token:
+        headers["flysource-auth"] = f"bearer {user.token}"
+        if url:
+            headers["flysource-sign"] = generate_sign(url, user.token)
+    return headers
 
 
 def generate_stuTaskId(lat, lng, acc, date, taskId, fileId=""):
@@ -179,7 +169,7 @@ def generate_signCode(timestamp_ms):
     return hashlib.md5(time_str.encode()).hexdigest()
 
 
-def generate_data(user):
+def generate_data(user: User) -> dict:
     signLat = user.latitude + round(random.uniform(-0.01, 0.01), 6)
     signLng = user.longitude + round(random.uniform(-0.01, 0.01), 6)
     locationAccuracy = round(random.uniform(25, 35), 2)
@@ -199,9 +189,9 @@ def generate_data(user):
     }
 
 
-# ================= 登录 =================
+# ================= 登录（关键修正：data= 而不是 params=）=================
 
-async def login(user):
+async def login(user: User) -> dict:
     headers = {
         "User-Agent": random.choice(UA_LIST),
         "authorization": AUTHORIZATION,
@@ -211,15 +201,26 @@ async def login(user):
         "Referer": f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
     }
 
+    form_data = generate_params(user)   # 表单数据
+
     async with user.session.post(
         url=WEB_DICT["token_api"],
-        params=generate_params(user),
+        data=form_data,                 # ★ 关键修正：使用 data= 而不是 params=
         headers=headers
     ) as resp:
         text = await resp.text()
-        print(f"登录状态:{resp.status}", file=sys.stderr)
-        print(f"登录响应:{text[:500]}", file=sys.stderr)
-        result = json.loads(text)
+        print(f"[LOGIN] 状态: {resp.status}", file=sys.stderr)
+        print(f"[LOGIN] URL: {resp.url}", file=sys.stderr)
+        print(f"[LOGIN] 响应体前500字符: {text[:500]}", file=sys.stderr)
+
+        # 安全解析 JSON
+        try:
+            result = json.loads(text)
+        except Exception:
+            return {
+                "success": False,
+                "msg": f"登录接口返回非JSON: {text[:200]}"
+            }
 
     if 'refresh_token' in result:
         user.token = result['refresh_token']
@@ -230,14 +231,18 @@ async def login(user):
         return {"success": False, "msg": error_msg}
 
 
-# ================= 获取 taskId =================
+# ================= 后续步骤（taskId、位置、签到）=================
 
-async def get_task_id(user):
+async def get_task_id(user: User) -> dict:
     async with user.session.get(
         url=WEB_DICT["task_id_api"],
         headers=generate_header(user, WEB_DICT["task_id_api"])
     ) as resp:
-        result = await resp.json()
+        text = await resp.text()
+        try:
+            result = json.loads(text)
+        except Exception:
+            return {"success": False, "msg": f"获取taskId返回非JSON: {text[:200]}"}
 
     if result.get('code') == 200:
         records = result.get('data', {}).get('records', [])
@@ -250,15 +255,17 @@ async def get_task_id(user):
     return {"success": False, "msg": result.get('msg', '获取taskId失败')}
 
 
-# ================= 微信配置 =================
-
-async def get_auth_config(user):
+async def get_auth_config(user: User) -> dict:
     url = WEB_DICT['auth_check_api'].format(TASK_ID=user.taskId, STUDENT_ID=user.student_Id)
     async with user.session.get(
         url=url,
         headers=generate_header(user, url)
     ) as resp:
-        result = await resp.json()
+        text = await resp.text()
+        try:
+            result = json.loads(text)
+        except Exception:
+            return {"success": False, "msg": f"获取微信配置返回非JSON: {text[:200]}"}
 
     if result.get('code') == 200:
         return {"success": True, "msg": ""}
@@ -268,21 +275,17 @@ async def get_auth_config(user):
     return {"success": False, "msg": result.get('msg', '获取配置失败')}
 
 
-# ================= 开启时间窗口 =================
-
-async def open_api_log(user):
+async def open_api_log(user: User) -> dict:
     async with user.session.post(
         url=WEB_DICT["apiLog_api"],
         headers=generate_header(user, WEB_DICT['apiLog_api'])
     ) as resp:
         if resp.status == 200:
             return {"success": True, "msg": ""}
-    return {"success": False, "msg": "开启时间窗口失败"}
+        return {"success": False, "msg": "开启时间窗口失败"}
 
 
-# ================= 获取位置 =================
-
-async def get_location(user):
+async def get_location(user: User) -> dict:
     url = WEB_DICT['get_location_api'].format(
         TASK_ID=user.taskId,
         date_str=datetime.now().strftime('%Y-%m-%d')
@@ -291,7 +294,12 @@ async def get_location(user):
         url=url,
         headers=generate_header(user, url)
     ) as resp:
-        result = await resp.json()
+        text = await resp.text()
+        try:
+            result = json.loads(text)
+        except Exception:
+            # 位置获取失败不应返回成功，让上层重试
+            return {"success": False, "msg": f"获取位置返回非JSON: {text[:200]}"}
 
     if result.get('code') == 200:
         dorm = result.get('data', {}).get('dormitoryRegisterVO', {})
@@ -299,15 +307,11 @@ async def get_location(user):
         user.longitude = float(dorm.get('locationLng', 118.227))
         user.room_id = dorm.get("roomId", "")
         return {"success": True, "msg": ""}
-    # 获取位置失败时使用默认位置
-    user.latitude = 31.668
-    user.longitude = 118.227
-    return {"success": True, "msg": "使用默认位置"}
+    # 获取位置失败，不自动用默认位置，返回错误让重试
+    return {"success": False, "msg": result.get('msg', '获取位置失败')}
 
 
-# ================= 执行签到 =================
-
-async def do_sign(user):
+async def do_sign(user: User) -> dict:
     async with SIGN_IN_LOCK:
         await asyncio.sleep(random.uniform(4, 10))
         async with user.session.post(
@@ -315,7 +319,11 @@ async def do_sign(user):
             json=generate_data(user),
             headers=generate_header(user, WEB_DICT['sign_in_api'])
         ) as resp:
-            result = await resp.json()
+            text = await resp.text()
+            try:
+                result = json.loads(text)
+            except Exception:
+                return {"success": False, "msg": f"签到返回非JSON: {text[:200]}"}
 
         if result.get('code') == 200 or '您今天已完成签到' in result.get('msg', ''):
             return {"success": True, "msg": result.get('msg', '签到成功')}
@@ -329,22 +337,20 @@ async def do_sign(user):
 
 # ================= 完整签到流程 =================
 
-async def sign_in_single(user, max_retries=3):
-    # 1. 登录
+async def sign_in_single(user: User, max_retries: int = 3) -> dict:
+    # 登录
     login_result = await login(user)
     if not login_result["success"]:
         await user.close()
         return {"success": False, "message": login_result["msg"]}
 
-    # 后续步骤需要 token
+    step = 1          # 1:taskId, 2:微信配置, 3:时间窗口, 4:位置, 5:签到
     retries = 0
-    step = 1  # 1:taskId, 2:微信配置, 3:时间窗口, 4:位置, 5:签到
 
     while retries < max_retries:
         if step == 1:
             result = await get_task_id(user)
             if result.get("need_relogin"):
-                # token 失效，重新登录
                 relogin = await login(user)
                 if not relogin["success"]:
                     return {"success": False, "message": relogin["msg"]}
@@ -378,7 +384,10 @@ async def sign_in_single(user, max_retries=3):
 
         elif step == 4:
             result = await get_location(user)
-            # 位置获取即使“使用默认位置”也算成功
+            if not result["success"]:
+                retries += 1
+                await asyncio.sleep(1)
+                continue
             step = 5
 
         elif step == 5:
@@ -398,23 +407,26 @@ async def sign_in_single(user, max_retries=3):
                 retries += 1
                 await asyncio.sleep(2)
 
-        # 防止无限循环
-        if retries >= max_retries:
-            break
-
     await user.close()
     return {"success": False, "message": "签到失败，已达最大重试次数"}
 
 
-# ================= 入口 =================
+# ================= 主入口 =================
 
 async def main():
+    # 将 DNS 诊断移到 main 内部，避免模块加载时报错
+    try:
+        import socket
+        print("=== DNS 诊断（自定义解析器前）===", file=sys.stderr)
+        print(socket.gethostbyname_ex("xskq.ahut.edu.cn"), file=sys.stderr)
+    except Exception as e:
+        print(f"DNS 诊断失败: {e}", file=sys.stderr)
+
     try:
         input_data = json.loads(sys.stdin.read())
         action = input_data.get('action', 'sign_single')
 
         if action == 'verify':
-            # 验证密码（只测试登录）
             user_data = input_data.get('user', {})
             user = User(
                 student_Id=str(user_data.get('studentId')),
