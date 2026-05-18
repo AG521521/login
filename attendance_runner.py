@@ -73,18 +73,24 @@ class User:
                     nameservers=[
                         "223.5.5.5",
                         "223.6.6.6",
-                        "119.29.29.29"
+                        "119.29.29.29",
+                        "8.8.8.8"          # 新增备用 DNS
                     ]
                 )
                 connector = aiohttp.TCPConnector(resolver=resolver)
-                print("使用自定义 DNS (223.5.5.5, 223.6.6.6, 119.29.29.29)", file=sys.stderr)
+                print("使用自定义 DNS (223.5.5.5, 223.6.6.6, 119.29.29.29, 8.8.8.8)", file=sys.stderr)
             except Exception as e:
                 print(f"自定义 DNS 初始化失败: {e}，回退系统默认 DNS", file=sys.stderr)
                 connector = aiohttp.TCPConnector()
 
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            # 增加超时时间，应对网络抖动
+            timeout = aiohttp.ClientTimeout(
+                total=60,
+                connect=20,
+                sock_connect=20,
+                sock_read=30
+            )
 
-            # 注意：这里不再动态添加 flysource-auth，避免污染全局 Session
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=timeout,
@@ -189,7 +195,7 @@ def generate_data(user: User) -> dict:
     }
 
 
-# ================= 登录（关键修正：data= 而不是 params=）=================
+# ================= 登录（带重试机制）=================
 
 async def login(user: User) -> dict:
     headers = {
@@ -201,34 +207,49 @@ async def login(user: User) -> dict:
         "Referer": f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
     }
 
-    form_data = generate_params(user)   # 表单数据
+    max_retries = 3
+    form_data = generate_params(user)
 
-    async with user.session.post(
-        url=WEB_DICT["token_api"],
-        data=form_data,                 # ★ 关键修正：使用 data= 而不是 params=
-        headers=headers
-    ) as resp:
-        text = await resp.text()
-        print(f"[LOGIN] 状态: {resp.status}", file=sys.stderr)
-        print(f"[LOGIN] URL: {resp.url}", file=sys.stderr)
-        print(f"[LOGIN] 响应体前500字符: {text[:500]}", file=sys.stderr)
-
-        # 安全解析 JSON
+    for attempt in range(max_retries):
         try:
-            result = json.loads(text)
-        except Exception:
-            return {
-                "success": False,
-                "msg": f"登录接口返回非JSON: {text[:200]}"
-            }
+            async with user.session.post(
+                url=WEB_DICT["token_api"],
+                data=form_data,
+                headers=headers
+            ) as resp:
+                text = await resp.text()
+                print(f"[LOGIN] 状态: {resp.status}", file=sys.stderr)
+                print(f"[LOGIN] URL: {resp.url}", file=sys.stderr)
+                print(f"[LOGIN] 响应体前500字符: {text[:500]}", file=sys.stderr)
 
-    if 'refresh_token' in result:
-        user.token = result['refresh_token']
-        user.username = result.get('userName', '')
-        return {"success": True, "msg": ""}
-    else:
-        error_msg = result.get("error_description") or result.get("msg", "登录失败")
-        return {"success": False, "msg": error_msg}
+                try:
+                    result = json.loads(text)
+                except Exception:
+                    return {
+                        "success": False,
+                        "msg": f"登录接口返回非JSON: {text[:200]}"
+                    }
+
+                if 'refresh_token' in result:
+                    user.token = result['refresh_token']
+                    user.username = result.get('userName', '')
+                    return {"success": True, "msg": ""}
+                else:
+                    error_msg = result.get("error_description") or result.get("msg", "登录失败")
+                    return {"success": False, "msg": error_msg}
+
+        except asyncio.TimeoutError:
+            print(f"[LOGIN] 第 {attempt+1} 次尝试超时", file=sys.stderr)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+                continue
+            return {"success": False, "msg": "连接超时，请稍后重试"}
+
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            return {"success": False, "msg": str(e)}
+
+    return {"success": False, "msg": "登录失败"}
 
 
 # ================= 后续步骤（taskId、位置、签到）=================
@@ -298,7 +319,6 @@ async def get_location(user: User) -> dict:
         try:
             result = json.loads(text)
         except Exception:
-            # 位置获取失败不应返回成功，让上层重试
             return {"success": False, "msg": f"获取位置返回非JSON: {text[:200]}"}
 
     if result.get('code') == 200:
@@ -307,7 +327,6 @@ async def get_location(user: User) -> dict:
         user.longitude = float(dorm.get('locationLng', 118.227))
         user.room_id = dorm.get("roomId", "")
         return {"success": True, "msg": ""}
-    # 获取位置失败，不自动用默认位置，返回错误让重试
     return {"success": False, "msg": result.get('msg', '获取位置失败')}
 
 
@@ -414,12 +433,12 @@ async def sign_in_single(user: User, max_retries: int = 3) -> dict:
 # ================= 主入口 =================
 
 async def main():
-    # 将 DNS 诊断移到 main 内部，避免模块加载时报错
+    # 静默 DNS 诊断（不输出错误，只做内部测试）
     try:
         import socket
         socket.gethostbyname_ex("xskq.ahut.edu.cn")
     except Exception:
-        pass   # 什么都不打印
+        pass   # 忽略，自定义 DNS 会接管
 
     try:
         input_data = json.loads(sys.stdin.read())
