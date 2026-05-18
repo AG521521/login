@@ -191,37 +191,47 @@ async def sign_in_by_step(user: User, step: int) -> dict:
 
     if step == 0:
         params_data = generate_params(user)
-        extra_headers = {
-            'Referer': f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?&userId={user.student_Id}"
+    
+        headers = {
+            "User-Agent": random.choice(UA_LIST),
+            "authorization":"Basic Zmx5b3VyY2Vfd2lzZV9hcHA6REE3ODhhc2RVREpuYXNkX2ZseXNvdXJjZV9kc2RhZERBSVVpdXd3cWU=",
+            "Content-Type":"application/x-www-form-urlencoded",
+            "X-Requested-With":"com.tencent.mm",
+            "Origin":"https://xskq.ahut.edu.cn",
+            "Referer":f"https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?userId={user.student_Id}"
         }
-        headers = generate_header(user)
-        headers.update(extra_headers)
-        
+    
         async with user.session.post(
             url=WEB_DICT["token_api"],
-            params=params_data,      # 改为 params
+            data=params_data,
             headers=headers
         ) as resp:
-            print(f"[DEBUG] Token 响应状态: {resp.status}", file=sys.stderr)
-            text = await resp.text()
-            print(f"[DEBUG] 响应体: {text[:500]}", file=sys.stderr)
-            try:
-                token_result = json.loads(text)
-            except json.JSONDecodeError as e:
-                print(f"[ERROR] JSON 解析失败: {e}", file=sys.stderr)
-                return {'success': False, 'msg': f'接口返回非JSON: {text[:100]}', 'step': -1}
-        
-        if 'refresh_token' in token_result:
-            user.token = token_result['refresh_token']
-            user.username = token_result.get('userName', '')
-            return {'success': True, 'msg': '', 'step': step + 1}
-        else:
-            error_desc = token_result.get('error_description', '')
-            if not error_desc:
-                error_desc = token_result.get('msg', '未知错误')
-            if "Bad credentials" in error_desc:
-                error_desc = "密码错误"
-            return {'success': False, 'msg': error_desc, 'step': -1}
+    
+            print("状态:",resp.status,file=sys.stderr)
+    
+            text=await resp.text()
+            print(text,file=sys.stderr)
+    
+            token_result=json.loads(text)
+    
+        if "access_token" in token_result:
+            user.token=token_result["access_token"]
+            user.username=token_result.get("userName","")
+    
+            return {
+                "success":True,
+                "msg":"",
+                "step":1
+            }
+    
+        return {
+            "success":False,
+            "msg":token_result.get(
+                "error_description",
+                token_result.get("msg","登录失败")
+            ),
+            "step":-1
+        }
     
     elif step == 1:
         async with user.session.get(
