@@ -3,195 +3,561 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>智能考勤系统 - 登录</title>
+  <title>AG工作室 - 智能考勤</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --ink: #162033;
+      --muted: #657184;
+      --line: #dfe6ef;
+      --primary: #3267d6;
+      --primary-dark: #204da6;
+      --teal: #0f9f9a;
+      --amber: #d97706;
+      --green: #16855a;
+      --shadow: 0 24px 70px rgba(22, 32, 51, 0.16);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
       min-height: 100vh;
-      display: flex;
-      justify-content: center;
+      background:
+        linear-gradient(135deg, rgba(50, 103, 214, 0.12), rgba(15, 159, 154, 0.12)),
+        var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+      line-height: 1.5;
+      padding: 32px;
+    }
+
+    .page {
+      width: min(1120px, 100%);
+      min-height: calc(100vh - 64px);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) 430px;
       align-items: center;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      gap: 28px;
     }
-    .login-container {
-      background: white;
-      padding: 40px;
-      border-radius: 24px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      width: 100%;
-      max-width: 400px;
+
+    .story-panel,
+    .login-panel {
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(223, 230, 239, 0.9);
+      box-shadow: var(--shadow);
     }
-    .logo {
-      text-align: center;
-      margin-bottom: 30px;
+
+    .story-panel {
+      min-height: 640px;
+      border-radius: 28px;
+      padding: 42px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
     }
-    .logo h1 {
-      font-size: 28px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--primary-dark);
+      font-weight: 800;
+      letter-spacing: 0;
+      margin-bottom: 28px;
     }
-    .logo p {
-      color: #888;
+
+    .brand-dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: #e8f1ff;
+      color: var(--primary);
+      font-weight: 900;
+    }
+
+    h1 {
+      max-width: 700px;
+      font-size: 52px;
+      line-height: 1.06;
+      letter-spacing: 0;
+      margin-bottom: 18px;
+    }
+
+    .lead {
+      max-width: 640px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .trust-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 34px 0;
+    }
+
+    .trust-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .trust-value {
+      display: block;
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+
+    .trust-label {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .sponsor-box {
+      border: 1px solid #f3d7a8;
+      border-radius: 18px;
+      background: #fff8ec;
+      padding: 22px;
+    }
+
+    .sponsor-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .sponsor-title {
+      font-size: 20px;
+      font-weight: 800;
+      color: #7c3f00;
+      margin-bottom: 6px;
+    }
+
+    .sponsor-copy {
+      color: #744a16;
       font-size: 14px;
-      margin-top: 5px;
     }
+
+    .sponsor-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+
+    .sponsor-btn,
+    .ghost-btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.18s, box-shadow 0.18s, background 0.18s;
+      white-space: nowrap;
+    }
+
+    .sponsor-btn {
+      background: var(--amber);
+      color: #fff;
+      box-shadow: 0 12px 24px rgba(217, 119, 6, 0.22);
+    }
+
+    .ghost-btn {
+      background: #fff;
+      color: #744a16;
+      border: 1px solid #efc982;
+    }
+
+    .sponsor-btn:hover,
+    .ghost-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .qr-grid {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .qr-grid.show { display: grid; }
+
+    .qr-card {
+      background: #fff;
+      border: 1px solid #f0d9ad;
+      border-radius: 14px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .qr-card img {
+      width: 132px;
+      height: 132px;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .qr-card strong {
+      display: block;
+      margin-top: 10px;
+      color: #7c3f00;
+    }
+
+    .login-panel {
+      border-radius: 24px;
+      padding: 34px;
+    }
+
+    .login-kicker {
+      color: var(--teal);
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .login-panel h2 {
+      font-size: 30px;
+      letter-spacing: 0;
+      margin-bottom: 8px;
+    }
+
+    .login-note {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+
     .input-group {
-      margin-bottom: 20px;
+      margin-bottom: 18px;
     }
+
     .input-group label {
       display: block;
       margin-bottom: 8px;
-      color: #555;
-      font-weight: 500;
+      color: #334155;
+      font-weight: 700;
       font-size: 14px;
     }
+
     .input-group input {
       width: 100%;
-      padding: 14px 16px;
-      border: 2px solid #e0e0e0;
-      border-radius: 12px;
+      height: 50px;
+      padding: 0 15px;
+      border: 1px solid #cfd9e6;
+      border-radius: 10px;
+      color: var(--ink);
       font-size: 16px;
-      transition: all 0.3s;
-    }
-    .input-group input:focus {
       outline: none;
-      border-color: #667eea;
-      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+      background: #fbfdff;
     }
-    .btn {
+
+    .input-group input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(50, 103, 214, 0.12);
+      background: #fff;
+    }
+
+    .login-btn {
       width: 100%;
-      padding: 14px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      border: none;
+      min-height: 52px;
+      border: 0;
       border-radius: 12px;
-      font-size: 18px;
-      font-weight: 600;
+      background: linear-gradient(135deg, var(--primary), var(--teal));
+      color: white;
+      font-size: 17px;
+      font-weight: 800;
       cursor: pointer;
-      transition: all 0.3s;
+      transition: transform 0.18s, box-shadow 0.18s, opacity 0.18s;
+      box-shadow: 0 16px 34px rgba(50, 103, 214, 0.26);
     }
-    .btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 20px 42px rgba(50, 103, 214, 0.3);
     }
-    .btn:disabled {
-      opacity: 0.6;
+
+    .login-btn:disabled {
+      opacity: 0.65;
       cursor: not-allowed;
       transform: none;
+      box-shadow: none;
     }
-    .tips {
-      margin-top: 20px;
-      padding: 15px;
-      background: #f8f9fa;
-      border-radius: 12px;
+
+    .benefit-list {
+      margin: 22px 0 0;
+      display: grid;
+      gap: 10px;
+    }
+
+    .benefit-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .check {
+      flex: 0 0 20px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #e9f8f3;
+      color: var(--green);
       font-size: 13px;
-      color: #666;
+      font-weight: 900;
+      margin-top: 1px;
     }
-    .tips p {
-      margin-bottom: 5px;
+
+    .support-strip {
+      margin-top: 22px;
+      border-radius: 14px;
+      padding: 14px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
     }
-    .footer {
-      text-align: center;
-      margin-top: 20px;
-      color: #aaa;
-      font-size: 12px;
+
+    .support-strip strong {
+      color: var(--ink);
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      background: #162033;
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 10px;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 14px 34px rgba(22, 32, 51, 0.22);
+      font-size: 14px;
+    }
+
+    .toast.show { display: block; }
+    .toast.error { background: #b91c1c; }
+
+    @media (max-width: 980px) {
+      body { padding: 20px; }
+      .page {
+        min-height: auto;
+        grid-template-columns: 1fr;
+      }
+      .story-panel { min-height: auto; padding: 30px; order: 2; }
+      .login-panel { order: 1; }
+      h1 { font-size: 38px; }
+      .trust-row { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 14px; }
+      .story-panel,
+      .login-panel {
+        border-radius: 18px;
+        padding: 22px;
+      }
+      h1 { font-size: 31px; }
+      .lead { font-size: 16px; }
+      .login-panel h2 { font-size: 26px; }
+      .sponsor-head { display: block; }
+      .sponsor-actions { display: grid; grid-template-columns: 1fr; }
+      .qr-grid { grid-template-columns: 1fr; }
+      .qr-card img { width: 150px; height: 150px; }
     }
   </style>
 </head>
 <body>
-  <div class="login-container">
-    <div class="logo">
-      <h1>📋 智能考勤</h1>
-      <p>AG工作室 · 让签到更简单</p>
-    </div>
-    
-    <div class="input-group">
-      <label>📱 学号</label>
-      <input type="text" id="studentId" placeholder="请输入学号" autocomplete="off">
-    </div>
-    
-    <div class="input-group">
-      <label>🔐 考勤系统密码</label>
-      <input type="password" id="password" placeholder="考勤系统密码（默认 Ahgydx@920）" value="Ahgydx@920">
-    </div>
-    
-    <button class="btn" id="loginBtn" onclick="login()">登 录</button>
-    
-    <div class="tips">
-      <p>💡 提示：</p>
-      <p>• 输入学号即可登录，无需注册</p>
-      <p>• 密码用于自动签到，登录时不验证</p>
-      <p>• 登录后可在仪表盘订阅自动签到</p>
-    </div>
-    
-    <div class="footer">
-      AG工作室 © 2026
-    </div>
-  </div>
+  <main class="page">
+    <section class="story-panel" aria-label="服务介绍与赞助">
+      <div>
+        <div class="brand-mark">
+          <span class="brand-dot">AG</span>
+          <span>AG工作室 出品</span>
+        </div>
+        <h1>把晚点名和签到，交给一个更稳的提醒系统。</h1>
+        <p class="lead">
+          智能考勤帮你保存签到任务、自动执行、记录结果。少一次临时慌张，多一点稳定和安心。
+        </p>
+
+        <div class="trust-row" aria-label="服务亮点">
+          <div class="trust-item">
+            <span class="trust-value">30 秒</span>
+            <span class="trust-label">学号登录，无需注册流程</span>
+          </div>
+          <div class="trust-item">
+            <span class="trust-value">21:25</span>
+            <span class="trust-label">默认晚寝签到时间</span>
+          </div>
+          <div class="trust-item">
+            <span class="trust-value">邮件</span>
+            <span class="trust-label">VIP 可接收签到结果通知</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sponsor-box">
+        <div class="sponsor-head">
+          <div>
+            <div class="sponsor-title">喜欢这个工具？赞助能直接提升稳定性。</div>
+            <p class="sponsor-copy">
+              服务器、数据库和域名都需要持续成本。赞助不是强制付费，而是让自动签到服务能更久、更稳地跑下去。
+            </p>
+          </div>
+        </div>
+        <div class="sponsor-actions">
+          <button class="sponsor-btn" type="button" onclick="toggleSponsor()">查看赞助码</button>
+          <button class="ghost-btn" type="button" onclick="focusLogin()">先登录使用</button>
+        </div>
+        <div class="qr-grid" id="sponsorQr">
+          <div class="qr-card">
+            <img src="https://login.agai.online/vxcode.png" alt="微信赞助收款码">
+            <strong>微信赞助</strong>
+          </div>
+          <div class="qr-card">
+            <img src="https://login.agai.online/zfbcode.png" alt="支付宝赞助收款码">
+            <strong>支付宝赞助</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="login-panel" aria-label="登录">
+      <div class="login-kicker">立即进入控制面板</div>
+      <h2>登录智能考勤</h2>
+      <p class="login-note">输入学号和考勤系统密码，登录后即可管理自动签到任务。</p>
+
+      <div class="input-group">
+        <label for="studentId">学号</label>
+        <input type="text" id="studentId" placeholder="请输入学号" autocomplete="username">
+      </div>
+
+      <div class="input-group">
+        <label for="password">考勤系统密码</label>
+        <input type="password" id="password" placeholder="默认 Ahgydx@920" value="Ahgydx@920" autocomplete="current-password">
+      </div>
+
+      <button class="login-btn" id="loginBtn" type="button" onclick="login()">登录并进入仪表盘</button>
+
+      <div class="benefit-list">
+        <div class="benefit-item">
+          <span class="check">✓</span>
+          <span>登录后可创建工作日、每天或自定义星期的签到任务。</span>
+        </div>
+        <div class="benefit-item">
+          <span class="check">✓</span>
+          <span>可以查看最近签到记录，快速发现失败原因。</span>
+        </div>
+        <div class="benefit-item">
+          <span class="check">✓</span>
+          <span>绑定邮箱可获得 VIP 体验，并接收结果通知。</span>
+        </div>
+      </div>
+
+      <div class="support-strip">
+        <strong>赞助建议：</strong>如果它帮你省过一次签到焦虑，随缘支持一点，就能帮服务多撑很久。
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
 
   <script>
     const API_BASE = 'https://api.agai.online/api';
-    
+    let toastTimer = null;
+
+    function showToast(message, type = '') {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = `toast show ${type}`.trim();
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.className = 'toast';
+      }, 3000);
+    }
+
+    function toggleSponsor() {
+      document.getElementById('sponsorQr').classList.toggle('show');
+    }
+
+    function focusLogin() {
+      document.getElementById('studentId').focus();
+    }
+
     async function login() {
       const studentId = document.getElementById('studentId').value.trim();
       const password = document.getElementById('password').value.trim();
       const btn = document.getElementById('loginBtn');
-      
+
       if (!studentId) {
-        alert('请输入学号');
+        showToast('请输入学号', 'error');
+        focusLogin();
         return;
       }
-      
+
       btn.disabled = true;
-      btn.textContent = '登录中...';
-      
+      btn.textContent = '正在验证...';
+
       try {
         const res = await fetch(`${API_BASE}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            studentId, 
-            attendancePassword: password || 'Ahgydx@920' 
+          body: JSON.stringify({
+            studentId,
+            attendancePassword: password || 'Ahgydx@920'
           })
         });
-        
+
         const data = await res.json();
-        
+
         if (data.success) {
           localStorage.setItem('token', data.token);
           localStorage.setItem('user', JSON.stringify(data.user));
           localStorage.setItem('attendancePassword', password || 'Ahgydx@920');
-          
           window.location.href = '/dashboard';
         } else {
-          alert(data.message || '登录失败');
+          showToast(data.message || '登录失败，请检查后重试', 'error');
         }
       } catch (error) {
-        alert('网络错误，请重试');
+        showToast('网络错误，请稍后重试', 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = '登 录';
+        btn.textContent = '登录并进入仪表盘';
       }
     }
-    
+
     document.getElementById('studentId').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') login();
     });
-    
+
     document.getElementById('password').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') login();
     });
-    
-    // 检查是否已登录
-    (function() {
+
+    (function checkLoginStatus() {
       const token = localStorage.getItem('token');
-      if (token) {
-        fetch(`${API_BASE}/user/profile`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
+      if (!token) return;
+
+      fetch(`${API_BASE}/user/profile`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
@@ -199,7 +565,6 @@
           }
         })
         .catch(() => {});
-      }
     })();
   </script>
 </body>
