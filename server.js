@@ -225,6 +225,66 @@ const SystemConfig = mongoose.models.SystemConfig || mongoose.model('SystemConfi
 const InviteLog = mongoose.models.InviteLog || mongoose.model('InviteLog', inviteLogSchema);
 const Feedback = mongoose.models.Feedback || mongoose.model('Feedback', feedbackSchema);
 
+const AUTO_SIGN_NAME = '自动签到';
+const AUTO_SIGN_TIME = '21:25';
+const DEFAULT_AUTO_SIGN_DAYS = [1, 2, 3, 4, 5];
+
+function normalizeAutoSignDays(days) {
+  const source = Array.isArray(days) && days.length > 0 ? days : DEFAULT_AUTO_SIGN_DAYS;
+  const normalized = [...new Set(
+    source
+      .map(day => Number(day))
+      .filter(day => Number.isInteger(day) && day >= 0 && day <= 6)
+  )].sort((a, b) => a - b);
+
+  return normalized.length > 0 ? normalized : DEFAULT_AUTO_SIGN_DAYS;
+}
+
+function formatAutoSignSetting(setting) {
+  return {
+    id: setting?._id || null,
+    _id: setting?._id || null,
+    name: AUTO_SIGN_NAME,
+    enabled: !!setting?.enabled,
+    scheduleType: 'custom',
+    customDays: setting ? normalizeAutoSignDays(setting.customDays) : DEFAULT_AUTO_SIGN_DAYS,
+    signTime: AUTO_SIGN_TIME,
+    maxRetries: 3,
+    notifyOnSuccess: setting ? setting.notifyOnSuccess !== false : true,
+    notifyOnFailure: setting ? setting.notifyOnFailure !== false : true,
+    createdAt: setting?.createdAt || null,
+    updatedAt: setting?.updatedAt || null
+  };
+}
+
+async function getAutoSignSetting(userId) {
+  return Subscription.findOne({ userId }).sort({ createdAt: 1 });
+}
+
+async function saveAutoSignSetting(userId, options = {}, targetId = null) {
+  const query = targetId ? { _id: targetId, userId } : { userId };
+  let setting = await Subscription.findOne(query).sort({ createdAt: 1 });
+
+  if (!setting) {
+    setting = new Subscription({ userId });
+  }
+
+  setting.name = AUTO_SIGN_NAME;
+  setting.enabled = options.enabled !== false;
+  setting.scheduleType = 'custom';
+  setting.customDays = normalizeAutoSignDays(options.customDays);
+  setting.signTime = AUTO_SIGN_TIME;
+  setting.maxRetries = 3;
+  setting.notifyOnSuccess = options.notifyOnSuccess !== false;
+  setting.notifyOnFailure = options.notifyOnFailure !== false;
+  setting.updatedAt = new Date();
+
+  await setting.save();
+  await Subscription.deleteMany({ userId, _id: { $ne: setting._id } });
+
+  return setting;
+}
+
 // ============ 初始化系统配置 ============
 async function initSystemConfig() {
   const defaults = [
@@ -1306,8 +1366,8 @@ app.post('/api/invite/apply', authMiddleware, async (req, res) => {
 // ============ 订阅管理 ============
 app.get('/api/subscriptions', authMiddleware, async (req, res) => {
   try {
-    const subscriptions = await Subscription.find({ userId: req.user._id });
-    res.json({ success: true, subscriptions });
+    const setting = await getAutoSignSetting(req.user._id);
+    res.json({ success: true, subscriptions: setting ? [formatAutoSignSetting(setting)] : [] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1315,22 +1375,35 @@ app.get('/api/subscriptions', authMiddleware, async (req, res) => {
 
 app.post('/api/subscriptions', authMiddleware, async (req, res) => {
   try {
-    const { name, scheduleType, customDays, signTime, maxRetries, notifyOnSuccess, notifyOnFailure } = req.body;
-    
-    const subscription = new Subscription({
-      userId: req.user._id,
-      name: name || '晚寝签到',
-      scheduleType: scheduleType || 'weekdays',
-      customDays: customDays || [1, 2, 3, 4, 5],
-      signTime: signTime || '21:25',
-      maxRetries: maxRetries || 3,
-      notifyOnSuccess: notifyOnSuccess !== false,
-      notifyOnFailure: notifyOnFailure !== false,
-      enabled: true
-    });
-    
-    await subscription.save();
-    res.json({ success: true, subscription });
+    const savedSubscription = await saveAutoSignSetting(req.user._id, req.body);
+    res.json({ success: true, subscription: formatAutoSignSetting(savedSubscription) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/auto-sign', authMiddleware, async (req, res) => {
+  try {
+    const setting = await getAutoSignSetting(req.user._id);
+    res.json({ success: true, setting: formatAutoSignSetting(setting) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/auto-sign', authMiddleware, async (req, res) => {
+  try {
+    const setting = await saveAutoSignSetting(req.user._id, req.body);
+    res.json({ success: true, setting: formatAutoSignSetting(setting) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.put('/api/auto-sign', authMiddleware, async (req, res) => {
+  try {
+    const setting = await saveAutoSignSetting(req.user._id, req.body);
+    res.json({ success: true, setting: formatAutoSignSetting(setting) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1343,11 +1416,8 @@ app.put('/api/subscriptions/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: '订阅不存在' });
     }
     
-    Object.assign(subscription, req.body);
-    subscription.updatedAt = new Date();
-    await subscription.save();
-    
-    res.json({ success: true, subscription });
+    const savedSubscription = await saveAutoSignSetting(req.user._id, req.body, req.params.id);
+    res.json({ success: true, subscription: formatAutoSignSetting(savedSubscription) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1369,7 +1439,12 @@ app.post('/api/subscriptions/:id/toggle', authMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: '订阅不存在' });
     }
     
+    subscription.name = AUTO_SIGN_NAME;
     subscription.enabled = !subscription.enabled;
+    subscription.scheduleType = 'custom';
+    subscription.customDays = normalizeAutoSignDays(subscription.customDays);
+    subscription.signTime = AUTO_SIGN_TIME;
+    subscription.maxRetries = 3;
     subscription.updatedAt = new Date();
     await subscription.save();
     
@@ -1472,7 +1547,8 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
     
     const todaySigns = await SignLog.countDocuments({ userId: user._id, executedAt: { $gte: today } });
     const todaySuccess = await SignLog.countDocuments({ userId: user._id, status: 'success', executedAt: { $gte: today } });
-    const activeSubscriptions = await Subscription.countDocuments({ userId: user._id, enabled: true });
+    const autoSignSetting = await Subscription.exists({ userId: user._id, enabled: true });
+    const autoSignEnabled = !!autoSignSetting;
     
     res.json({
       success: true,
@@ -1481,7 +1557,8 @@ app.get('/api/stats', authMiddleware, async (req, res) => {
         successSigns: user.successSignCount || 0,
         todaySigns,
         todaySuccess,
-        activeSubscriptions,
+        activeSubscriptions: autoSignEnabled ? 1 : 0,
+        autoSignEnabled,
         isVip: user.isVip,
         vipExpireAt: user.vipExpireAt
       }
@@ -1567,7 +1644,8 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
     const todaySuccessSigns = await SignLog.countDocuments({ status: 'success', executedAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
     const successRate = todaySigns > 0 ? ((todaySuccessSigns / todaySigns) * 100).toFixed(1) : 0;
     
-    const activeSubscriptions = await Subscription.countDocuments({ enabled: true });
+    const activeAutoSignUserIds = await Subscription.distinct('userId', { enabled: true });
+    const activeAutoSignUsers = activeAutoSignUserIds.length;
     const totalInvites = await InviteLog.countDocuments();
     
     res.json({
@@ -1575,7 +1653,8 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
       stats: {
         users: { total: totalUsers, vip: vipUsers, today: todayUsers },
         signs: { total: totalSigns, today: todaySigns, success: successSigns, successRate },
-        subscriptions: { active: activeSubscriptions },
+        subscriptions: { active: activeAutoSignUsers },
+        autoSign: { users: activeAutoSignUsers },
         invites: { total: totalInvites }
       }
     });
@@ -1656,7 +1735,8 @@ app.get('/api/admin/users/:id', adminMiddleware, async (req, res) => {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
     
-    const subscriptions = await Subscription.find({ userId: user._id });
+    const autoSignSetting = await getAutoSignSetting(user._id);
+    const subscriptions = autoSignSetting ? [formatAutoSignSetting(autoSignSetting)] : [];
     const logs = await SignLog.find({ userId: user._id }).sort({ executedAt: -1 }).limit(20);
     
     res.json({ success: true, user, subscriptions, logs });
