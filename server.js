@@ -2324,18 +2324,6 @@ app.get('/api/market/items', async (req, res) => {
   }
 });
 
-// 图片上传
-app.post('/api/market/upload', authMiddleware, upload.array('images', 5), async (req, res) => {
-  try {
-    const urls = req.files.map(f => `/uploads/${f.filename}`);
-    res.json({ success: true, urls });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-
-
 // 发布商品
 app.post('/api/market/items', authMiddleware, async (req, res) => {
   try {
