@@ -963,6 +963,72 @@ app.post('/api/plant/mode', async (req, res) => {
     }
 });
 
+
+// ============ 快速登录（无需考勤系统）============
+app.post('/api/quick-login', async (req, res) => {
+  try {
+    const { nickname } = req.body;
+    
+    if (!nickname || nickname.trim().length < 2) {
+      return res.status(400).json({ success: false, message: '昵称至少2个字符' });
+    }
+    
+    if (!MONGODB_URI) {
+      return res.status(503).json({ success: false, message: '数据库未配置' });
+    }
+    
+    // 生成一个虚拟学号
+    const guestId = 'guest_' + crypto.randomBytes(6).toString('hex');
+    
+    // 确保不重复
+    let user = await User.findOne({ studentId: guestId });
+    while (user) {
+      guestId = 'guest_' + crypto.randomBytes(6).toString('hex');
+      user = await User.findOne({ studentId: guestId });
+    }
+    
+    // 生成邀请码
+    let inviteCode;
+    let isUnique = false;
+    while (!isUnique) {
+      inviteCode = generateInviteCode(8);
+      const existing = await User.findOne({ inviteCode });
+      if (!existing) isUnique = true;
+    }
+    
+    user = new User({
+      studentId: guestId,
+      name: nickname.trim(),
+      role: 'user',
+      inviteCode,
+      lastLogin: new Date()
+    });
+    await user.save();
+    
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
+    
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        studentId: user.studentId,
+        name: user.name,
+        email: '',
+        emailVerified: false,
+        isVip: false,
+        vipExpireAt: null,
+        role: 'user',
+        inviteCode: user.inviteCode,
+        totalSignCount: 0,
+        successSignCount: 0
+      }
+    });
+  } catch (error) {
+    console.error('快速登录错误:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // ============ 登录 ============
 app.post('/api/login', async (req, res) => {
   try {
