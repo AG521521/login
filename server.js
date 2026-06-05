@@ -12,7 +12,13 @@ const cron = require('node-cron');
 const { spawn } = require('child_process');
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
+const fs = require('fs');
 const http = require('http');
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
@@ -81,7 +87,29 @@ app.options('*', (req, res) => {
   res.sendStatus(200);
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use('/uploads', express.static(uploadsDir));
+
+// multer 图片上传配置
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('只允许上传图片文件'));
+    }
+    cb(null, true);
+  }
+});
+
 
 // ============ 数据库连接 ============
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -2316,6 +2344,18 @@ app.get('/api/market/items', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// 图片上传
+app.post('/api/market/upload', authMiddleware, upload.array('images', 5), async (req, res) => {
+  try {
+    const urls = req.files.map(f => `/uploads/${f.filename}`);
+    res.json({ success: true, urls });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
 
 // 发布商品
 app.post('/api/market/items', authMiddleware, async (req, res) => {
