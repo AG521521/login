@@ -2258,6 +2258,23 @@ app.get('/api/payment/order/:orderNo', authMiddleware, async (req, res) => {
   }
 });
 
+// ============ 管理员一键签到 ============
+app.post('/api/admin/trigger-sign', adminMiddleware, async (req, res) => {
+  try {
+    console.log(`🔔 管理员 ${req.user.studentId} 手动触发全员签到`);
+    
+    // 立即执行一次自动签到任务（异步，不阻塞响应）
+    executeAutoSign().catch(err => console.error('手动签到任务错误:', err));
+    
+    res.json({
+      success: true,
+      message: '已触发全员签到任务，请查看日志了解执行情况'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ 管理员留言管理 API ============
 
 // 获取所有留言（管理员）
