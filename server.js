@@ -184,6 +184,54 @@ const inviteLogSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// ============ 二手市场模型 ============
+const marketItemSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  price: { type: Number, required: true },
+  category: { type: String, enum: ['book', 'electronic', 'life', 'other'], default: 'other' },
+  images: { type: [String], default: [] },
+  contact: {
+    qq: { type: String, default: '' },
+    wechat: { type: String, default: '' }
+  },
+  status: { type: String, enum: ['active', 'sold', 'removed'], default: 'active' },
+  views: { type: Number, default: 0 },
+  contactViews: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const favoriteSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'MarketItem', required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+favoriteSchema.index({ userId: 1, productId: 1 }, { unique: true });
+
+const chatRoomSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'MarketItem' },
+  buyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  lastMessage: String,
+  lastMessageAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+chatRoomSchema.index({ productId: 1, buyerId: 1 }, { unique: true });
+
+const messageSchema = new mongoose.Schema({
+  roomId: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatRoom', required: true },
+  senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const MarketItem = mongoose.models.MarketItem || mongoose.model('MarketItem', marketItemSchema);
+const Favorite = mongoose.models.Favorite || mongoose.model('Favorite', favoriteSchema);
+const ChatRoom = mongoose.models.ChatRoom || mongoose.model('ChatRoom', chatRoomSchema);
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema); 
+
 // 留言/反馈模型
 const feedbackSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -2212,6 +2260,209 @@ app.delete('/api/admin/feedback/:id', adminMiddleware, async (req, res) => {
     }
     
     res.json({ success: true, message: '留言已删除' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 二手市场 API ============
+
+// 获取商品列表
+app.get('/api/market/items', async (req, res) => {
+  try {
+    const { page = 1, limit = 20, category, search, id } = req.query;
+    
+    if (id) {
+      const item = await MarketItem.findById(id).populate('userId', 'studentId name');
+      if (!item) return res.status(404).json({ success: false, message: '商品不存在' });
+      item.views = (item.views || 0) + 1;
+      await item.save();
+      return res.json({ success: true, items: [item] });
+    }
+    
+    const query = { status: 'active' };
+    if (category && category !== 'all') query.category = category;
+    if (search) query.title = { $regex: search, $options: 'i' };
+    
+    const items = await MarketItem.find(query)
+      .populate('userId', 'studentId name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    
+    const total = await MarketItem.countDocuments(query);
+    res.json({ success: true, items, total, page: parseInt(page) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 发布商品
+app.post('/api/market/items', authMiddleware, async (req, res) => {
+  try {
+    const { title, description, price, category, contact } = req.body;
+    if (!title || !description || price == null) {
+      return res.status(400).json({ success: false, message: '请填写完整信息' });
+    }
+    const item = new MarketItem({
+      userId: req.user._id,
+      title,
+      description,
+      price,
+      category: category || 'other',
+      contact: contact || { qq: '', wechat: '' },
+      status: 'active'
+    });
+    await item.save();
+    res.json({ success: true, item });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取联系方式
+app.get('/api/market/contact/:id', async (req, res) => {
+  try {
+    const item = await MarketItem.findById(req.params.id);
+    if (!item) return res.status(404).json({ success: false, message: '商品不存在' });
+    item.contactViews = (item.contactViews || 0) + 1;
+    await item.save();
+    res.json({ success: true, contact: item.contact });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 我的商品
+app.get('/api/market/my', authMiddleware, async (req, res) => {
+  try {
+    const items = await MarketItem.find({ userId: req.user._id, status: { $ne: 'removed' } })
+      .sort({ createdAt: -1 });
+    res.json({ success: true, items });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 下架商品
+app.delete('/api/market/items/:id', authMiddleware, async (req, res) => {
+  try {
+    const item = await MarketItem.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!item) return res.status(404).json({ success: false, message: '商品不存在' });
+    item.status = 'removed';
+    await item.save();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 收藏功能 ============
+
+// 收藏/取消收藏
+app.post('/api/market/favorite', authMiddleware, async (req, res) => {
+  try {
+    const { productId } = req.body;
+    const existing = await Favorite.findOne({ userId: req.user._id, productId });
+    if (existing) {
+      await Favorite.deleteOne({ _id: existing._id });
+      return res.json({ success: true, favorited: false });
+    }
+    await Favorite.create({ userId: req.user._id, productId });
+    res.json({ success: true, favorited: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取收藏列表
+app.get('/api/market/favorite', authMiddleware, async (req, res) => {
+  try {
+    const favorites = await Favorite.find({ userId: req.user._id }).populate({
+      path: 'productId',
+      match: { status: 'active' },
+      populate: { path: 'userId', select: 'studentId name' }
+    });
+    const items = favorites.filter(f => f.productId).map(f => f.productId);
+    res.json({ success: true, items });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============ 聊天功能 ============
+
+// 创建聊天室
+app.post('/api/market/chat/create', authMiddleware, async (req, res) => {
+  try {
+    const { sellerId, productId } = req.body;
+    const buyerId = req.user._id;
+    if (buyerId === sellerId) return res.status(400).json({ success: false, message: '不能和自己聊天' });
+    
+    let room = await ChatRoom.findOne({ productId, buyerId, sellerId });
+    if (!room) {
+      room = await ChatRoom.create({ productId, buyerId, sellerId });
+    }
+    res.json({ success: true, roomId: room._id });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 聊天列表
+app.get('/api/market/chat/list', authMiddleware, async (req, res) => {
+  try {
+    const rooms = await ChatRoom.find({
+      $or: [{ buyerId: req.user._id }, { sellerId: req.user._id }]
+    })
+    .populate('productId', 'title')
+    .populate('buyerId', 'studentId name')
+    .populate('sellerId', 'studentId name')
+    .sort({ lastMessageAt: -1 });
+    
+    const result = rooms.map(room => ({
+      _id: room._id,
+      productId: room.productId?._id,
+      productTitle: room.productId?.title || '已删除',
+      otherUser: room.buyerId._id.toString() === req.user._id.toString() ? room.sellerId : room.buyerId,
+      lastMessage: room.lastMessage,
+      lastMessageAt: room.lastMessageAt
+    }));
+    res.json({ success: true, rooms: result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取消息
+app.get('/api/market/chat/messages', authMiddleware, async (req, res) => {
+  try {
+    const { roomId } = req.query;
+    const messages = await Message.find({ roomId }).sort({ createdAt: 1 }).limit(100);
+    res.json({ success: true, messages });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 发送消息
+app.post('/api/market/chat/send', authMiddleware, async (req, res) => {
+  try {
+    const { roomId, content } = req.body;
+    if (!content) return res.status(400).json({ success: false, message: '请输入内容' });
+    
+    const message = await Message.create({
+      roomId,
+      senderId: req.user._id,
+      content
+    });
+    
+    await ChatRoom.findByIdAndUpdate(roomId, {
+      lastMessage: content,
+      lastMessageAt: new Date()
+    });
+    
+    res.json({ success: true, message });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
