@@ -232,6 +232,26 @@ const Favorite = mongoose.models.Favorite || mongoose.model('Favorite', favorite
 const ChatRoom = mongoose.models.ChatRoom || mongoose.model('ChatRoom', chatRoomSchema);
 const Message = mongoose.models.Message || mongoose.model('Message', messageSchema); 
 
+// ============ 举报和拉黑模型 ============
+const reportSchema = new mongoose.Schema({
+  reporterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  targetUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'MarketItem' },
+  reason: { type: String, required: true },
+  status: { type: String, enum: ['pending', 'handled', 'dismissed'], default: 'pending' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const blockSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  blockedUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+blockSchema.index({ userId: 1, blockedUserId: 1 }, { unique: true });
+
+const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);
+const Block = mongoose.models.Block || mongoose.model('Block', blockSchema);
+
 // 留言/反馈模型
 const feedbackSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -2300,7 +2320,7 @@ app.get('/api/market/items', async (req, res) => {
 // 发布商品
 app.post('/api/market/items', authMiddleware, async (req, res) => {
   try {
-    const { title, description, price, category, contact } = req.body;
+    const { title, description, price, category, contact, images } = req.body;
     if (!title || !description || price == null) {
       return res.status(400).json({ success: false, message: '请填写完整信息' });
     }
@@ -2311,6 +2331,7 @@ app.post('/api/market/items', authMiddleware, async (req, res) => {
       price,
       category: category || 'other',
       contact: contact || { qq: '', wechat: '' },
+      images: images || [],  // 添加这行
       status: 'active'
     });
     await item.save();
@@ -2463,6 +2484,88 @@ app.post('/api/market/chat/send', authMiddleware, async (req, res) => {
     });
     
     res.json({ success: true, message });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
+// ============ 举报与拉黑 API ============
+
+// 举报用户
+app.post('/api/market/report', authMiddleware, async (req, res) => {
+  try {
+    const { userId, reason, productId } = req.body;
+    if (!userId || !reason) {
+      return res.status(400).json({ success: false, message: '请填写举报原因' });
+    }
+    
+    const report = new Report({
+      reporterId: req.user._id,
+      targetUserId: userId,
+      productId: productId || null,
+      reason,
+      status: 'pending'
+    });
+    await report.save();
+    
+    res.json({ success: true, message: '举报已提交，我们会尽快处理' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 拉黑用户
+app.post('/api/market/block', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ success: false, message: '请指定用户' });
+    if (userId === req.user._id.toString()) return res.status(400).json({ success: false, message: '不能拉黑自己' });
+    
+    const existing = await Block.findOne({ userId: req.user._id, blockedUserId: userId });
+    if (existing) {
+      await Block.deleteOne({ _id: existing._id });
+      return res.json({ success: true, blocked: false, message: '已取消拉黑' });
+    }
+    
+    await Block.create({ userId: req.user._id, blockedUserId: userId });
+    res.json({ success: true, blocked: true, message: '已拉黑用户' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 管理员获取举报列表
+app.get('/api/admin/reports', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    
+    const reports = await Report.find(query)
+      .populate('reporterId', 'studentId name')
+      .populate('targetUserId', 'studentId name')
+      .populate('productId', 'title')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    
+    const total = await Report.countDocuments(query);
+    const pendingCount = await Report.countDocuments({ status: 'pending' });
+    
+    res.json({ success: true, reports, total, page: parseInt(page), pendingCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 管理员处理举报
+app.put('/api/admin/reports/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const report = await Report.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    if (!report) return res.status(404).json({ success: false, message: '举报不存在' });
+    res.json({ success: true, report });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
