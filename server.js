@@ -130,8 +130,14 @@ const userSchema = new mongoose.Schema({
   // 邀请功能字段
   inviteCode: { type: String, unique: true, sparse: true },
   invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  inviteCount: { type: Number, default: 0 }
+  inviteCount: { type: Number, default: 0 },
+  // 二手市场收款码
+  payQR: {
+    wechat: { type: String, default: '' },
+    alipay: { type: String, default: '' }
+  }
 });
+
 
 const subscriptionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -193,6 +199,7 @@ const inviteLogSchema = new mongoose.Schema({
 
 // ============ 二手市场模型 ============
 const marketItemSchema = new mongoose.Schema({
+  productNo: { type: String, unique: true, sparse: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
   description: { type: String, required: true },
@@ -258,6 +265,36 @@ blockSchema.index({ userId: 1, blockedUserId: 1 }, { unique: true });
 
 const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);
 const Block = mongoose.models.Block || mongoose.model('Block', blockSchema);
+// ============ 购物车模型 ============
+const cartSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'MarketItem', required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+cartSchema.index({ userId: 1, productId: 1 }, { unique: true });
+
+// ============ 二手市场订单模型 ============
+const marketOrderSchema = new mongoose.Schema({
+  orderNo: { type: String, required: true, unique: true },
+  buyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'MarketItem', required: true },
+  productNo: String,
+  title: String,
+  price: Number,
+  address: {
+    name: { type: String, required: true },
+    phone: { type: String, required: true },
+    detail: { type: String, required: true }
+  },
+  status: { type: String, enum: ['pending', 'confirmed', 'shipped', 'completed', 'cancelled'], default: 'pending' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const Cart = mongoose.models.Cart || mongoose.model('Cart', cartSchema);
+const MarketOrder = mongoose.models.MarketOrder || mongoose.model('MarketOrder', marketOrderSchema);
+
 
 // 留言/反馈模型
 const feedbackSchema = new mongoose.Schema({
@@ -1182,6 +1219,7 @@ app.get('/api/user/profile', authMiddleware, async (req, res) => {
       totalSignCount: user.totalSignCount,
       successSignCount: user.successSignCount,
       createdAt: user.createdAt
+      payQR: user.payQR || { wechat: '', alipay: '' }
     }
   });
 });
@@ -2407,21 +2445,24 @@ app.get('/api/market/items', async (req, res) => {
   }
 });
 
-// 发布商品
+//fa布商品
 app.post('/api/market/items', authMiddleware, async (req, res) => {
   try {
     const { title, description, price, category, contact, images } = req.body;
     if (!title || !description || price == null) {
       return res.status(400).json({ success: false, message: '请填写完整信息' });
     }
+    // 生成商品专号：AG + 时间戳后6位 + 随机4位
+    const productNo = 'AG' + Date.now().toString(36).slice(-6).toUpperCase() + Math.random().toString(36).slice(2,6).toUpperCase();
     const item = new MarketItem({
+      productNo,
       userId: req.user._id,
       title,
       description,
       price,
       category: category || 'other',
       contact: contact || { qq: '', wechat: '' },
-      images: images || [],  // 添加这行
+      images: images || [],
       status: 'active'
     });
     await item.save();
@@ -2430,6 +2471,7 @@ app.post('/api/market/items', authMiddleware, async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 // 获取联系方式
 app.get('/api/market/contact/:id', async (req, res) => {
@@ -2623,6 +2665,140 @@ app.post('/api/market/block', authMiddleware, async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+});
+
+
+// ============ 购物车 API ============
+// 加入购物车
+app.post('/api/market/cart', authMiddleware, async (req, res) => {
+  try {
+    const { productId } = req.body;
+    const existing = await Cart.findOne({ userId: req.user._id, productId });
+    if (existing) return res.json({ success: false, message: '已在购物车中' });
+    await Cart.create({ userId: req.user._id, productId });
+    res.json({ success: true, message: '已加入购物车' });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 查看我的购物车
+app.get('/api/market/cart', authMiddleware, async (req, res) => {
+  try {
+    const cartItems = await Cart.find({ userId: req.user._id })
+      .populate({ path: 'productId', populate: { path: 'userId', select: 'studentId name' } });
+    const items = cartItems.filter(c => c.productId && c.productId.status === 'active').map(c => c.productId);
+    res.json({ success: true, items });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 从购物车移除
+app.delete('/api/market/cart/:productId', authMiddleware, async (req, res) => {
+  try {
+    await Cart.deleteOne({ userId: req.user._id, productId: req.params.productId });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 卖家查看谁加购了自己的商品
+app.get('/api/market/cart/seller', authMiddleware, async (req, res) => {
+  try {
+    const myProducts = await MarketItem.find({ userId: req.user._id, status: 'active' }).select('_id productNo title');
+    const productIds = myProducts.map(p => p._id);
+    const cartEntries = await Cart.find({ productId: { $in: productIds } })
+      .populate('userId', 'studentId name')
+      .populate('productId', 'productNo title price');
+    res.json({ success: true, cartEntries });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// ============ 二手订单 API ============
+// 创建订单（含收货地址）
+app.post('/api/market/orders', authMiddleware, async (req, res) => {
+  try {
+    const { productId, address } = req.body;
+    if (!address || !address.name || !address.phone || !address.detail) {
+      return res.status(400).json({ success: false, message: '请填写完整收货信息' });
+    }
+    const item = await MarketItem.findById(productId);
+    if (!item || item.status !== 'active') return res.status(404).json({ success: false, message: '商品不存在或已下架' });
+    if (item.userId.toString() === req.user._id.toString()) return res.status(400).json({ success: false, message: '不能购买自己的商品' });
+    const orderNo = 'ORD' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,6).toUpperCase();
+    const order = await MarketOrder.create({
+      orderNo, buyerId: req.user._id, sellerId: item.userId, productId,
+      productNo: item.productNo, title: item.title, price: item.price,
+      address, status: 'pending'
+    });
+    await Cart.deleteOne({ userId: req.user._id, productId });
+    res.json({ success: true, order });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 买家查看我的订单
+app.get('/api/market/orders/buyer', authMiddleware, async (req, res) => {
+  try {
+    const orders = await MarketOrder.find({ buyerId: req.user._id })
+      .populate('sellerId', 'studentId name').sort({ createdAt: -1 });
+    res.json({ success: true, orders });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 卖家查看订单
+app.get('/api/market/orders/seller', authMiddleware, async (req, res) => {
+  try {
+    const orders = await MarketOrder.find({ sellerId: req.user._id })
+      .populate('buyerId', 'studentId name').sort({ createdAt: -1 });
+    res.json({ success: true, orders });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 卖家确认/取消订单
+app.put('/api/market/orders/:id', authMiddleware, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const order = await MarketOrder.findOne({ _id: req.params.id, sellerId: req.user._id });
+    if (!order) return res.status(404).json({ success: false, message: '订单不存在' });
+    order.status = status; order.updatedAt = new Date();
+    await order.save();
+    res.json({ success: true, order });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// ============ 收款码 API ============
+// 上传收款码
+app.post('/api/user/payqr', authMiddleware, async (req, res) => {
+  try {
+    const { wechat, alipay } = req.body;
+    const update = {};
+    if (wechat !== undefined) update['payQR.wechat'] = wechat;
+    if (alipay !== undefined) update['payQR.alipay'] = alipay;
+    await User.findByIdAndUpdate(req.user._id, update);
+    res.json({ success: true, message: '收款码已更新' });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// 获取卖家收款码
+app.get('/api/user/payqr/:userId', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).select('payQR name studentId');
+    if (!user) return res.status(404).json({ success: false, message: '用户不存在' });
+    res.json({ success: true, payQR: user.payQR || { wechat: '', alipay: '' }, name: user.name });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// ============ 管理员订单管理 ============
+app.get('/api/admin/orders', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    const orders = await MarketOrder.find(query)
+      .populate('buyerId', 'studentId name')
+      .populate('sellerId', 'studentId name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    const total = await MarketOrder.countDocuments(query);
+    res.json({ success: true, orders, total, page: parseInt(page) });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
 // 管理员获取举报列表
