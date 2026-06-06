@@ -484,6 +484,17 @@ const authMiddleware = async (req, res, next) => {
     }
     
     req.user = user;
+    // 游客只能访问市场相关API，禁止访问签到系统
+    if (user.studentId && user.studentId.startsWith('guest_')) {
+      const allowedPaths = [
+        '/api/market', '/api/user/payqr', '/api/quick-login',
+        '/api/user/profile', '/api/feedback'
+      ];
+      const isAllowed = allowedPaths.some(p => req.path.startsWith(p));
+      if (!isAllowed) {
+        return res.status(403).json({ success: false, message: '游客无权访问此功能，请使用市场账号' });
+      }
+    }
     next();
   } catch (error) {
     return res.status(401).json({ success: false, message: '登录已过期' });
@@ -1815,7 +1826,8 @@ app.get('/api/feedback/:id', authMiddleware, async (req, res) => {
 // 系统统计
 app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
+    const totalUsers = await User.countDocuments({ isGuest: { $ne: true } });
+    const vipUsers = await User.countDocuments({ isVip: true, isGuest: { $ne: true } });
     const vipUsers = await User.countDocuments({ isVip: true });
     const todayUsers = await User.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
     
@@ -1880,7 +1892,27 @@ app.put('/api/admin/config/:key', adminMiddleware, async (req, res) => {
 // 用户列表
 app.get('/api/admin/users', adminMiddleware, async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = '' } = req.query;
+    const { page = 1, limit = 20, search = '', showGuests = 'false' } = req.query;
+    
+    const baseQuery = {};
+    let query;
+    if (showGuests !== 'true') {
+      baseQuery.isGuest = { $ne: true };
+    }
+    if (search) {
+      query = {
+        $and: [
+          baseQuery,
+          { $or: [
+            { studentId: { $regex: search, $options: 'i' } },
+            { name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } }
+          ]}
+        ]
+      };
+    } else {
+      query = baseQuery;
+    }
     
     const query = search ? {
       $or: [
@@ -2801,6 +2833,36 @@ app.get('/api/admin/orders', adminMiddleware, async (req, res) => {
     const total = await MarketOrder.countDocuments(query);
     res.json({ success: true, orders, total, page: parseInt(page) });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// ============ 管理员商品管理 ============
+app.get('/api/admin/market-items', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status = '' } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    const items = await MarketItem.find(query)
+      .populate('userId', 'studentId name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+    const total = await MarketItem.countDocuments(query);
+    res.json({ success: true, items, total, page: parseInt(page) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete('/api/admin/market-items/:id', adminMiddleware, async (req, res) => {
+  try {
+    const item = await MarketItem.findById(req.params.id);
+    if (!item) return res.status(404).json({ success: false, message: '商品不存在' });
+    item.status = 'deleted';
+    await item.save();
+    res.json({ success: true, message: '商品已下架' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 // 管理员获取举报列表
