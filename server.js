@@ -1913,13 +1913,6 @@ app.get('/api/admin/users', adminMiddleware, async (req, res) => {
       query = baseQuery;
     }
     
-    const query = search ? {
-      $or: [
-        { studentId: { $regex: search, $options: 'i' } },
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
-      ]
-    } : {};
     
     const users = await User.find(query)
       .select('-__v -attendancePassword')
