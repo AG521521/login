@@ -1218,7 +1218,7 @@ app.get('/api/user/profile', authMiddleware, async (req, res) => {
       inviteCount: user.inviteCount,
       totalSignCount: user.totalSignCount,
       successSignCount: user.successSignCount,
-      createdAt: user.createdAt
+      createdAt: user.createdAt,
       payQR: user.payQR || { wechat: '', alipay: '' }
     }
   });
