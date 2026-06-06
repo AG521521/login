@@ -1828,7 +1828,6 @@ app.get('/api/admin/stats', adminMiddleware, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments({ isGuest: { $ne: true } });
     const vipUsers = await User.countDocuments({ isVip: true, isGuest: { $ne: true } });
-    const vipUsers = await User.countDocuments({ isVip: true });
     const todayUsers = await User.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } });
     
     const totalSigns = await SignLog.countDocuments();
