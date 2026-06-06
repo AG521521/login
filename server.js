@@ -1070,7 +1070,9 @@ app.post('/api/quick-login', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { studentId, attendancePassword } = req.body;
-    
+    if (studentId && studentId.startsWith('guest_')) {
+      return res.status(403).json({ success: false, message: '市场游客请通过二手市场登录' });
+    }
     if (!studentId) {
       return res.status(400).json({ success: false, message: '请输入学号' });
     }
